@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="theme-color" content="#0f0f0f"/>
+<title>RideSync</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f0f0f;
+    --surface: #1a1a1a;
+    --surface2: #252525;
+    --border: rgba(255,255,255,0.08);
+    --text: #f0f0f0;
+    --muted: #888;
+    --accent: #4ECDC4;
+    --leader: #FFD700;
+    --danger: #FF6B6B;
+    --radius: 12px;
+  }
+
+  html, body { height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; overflow: hidden; }
+
+  /* JOIN SCREEN */
+  #join-screen {
+    position: fixed; inset: 0; background: var(--bg);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 16px; padding: 32px; z-index: 1000;
+  }
+  #join-screen h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.5px; }
+  #join-screen h1 span { color: var(--accent); }
+  #join-screen p { color: var(--muted); font-size: 0.9rem; text-align: center; }
+  #name-input {
+    width: 100%; max-width: 320px; padding: 14px 16px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); color: var(--text); font-size: 1rem;
+    outline: none; transition: border-color .2s;
+  }
+  #name-input:focus { border-color: var(--accent); }
+  #join-btn {
+    width: 100%; max-width: 320px; padding: 14px;
+    background: var(--accent); border: none; border-radius: var(--radius);
+    color: #0f0f0f; font-size: 1rem; font-weight: 600; cursor: pointer;
+    transition: opacity .2s;
+  }
+  #join-btn:active { opacity: 0.8; }
+
+  /* MAIN APP */
+  #app { display: none; height: 100%; flex-direction: column; }
+  #app.visible { display: flex; }
+
+  /* MAP */
+  #map { flex: 1; position: relative; }
+  #map-el { width: 100%; height: 100%; }
+
+  /* CENTER ON ME BUTTON */
+  #center-btn {
+    position: absolute; bottom: 16px; right: 16px; z-index: 500;
+    width: 44px; height: 44px; border-radius: 50%;
+    background: var(--surface); border: 1px solid var(--border);
+    color: var(--text); font-size: 1.2rem; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 2px 12px rgba(0,0,0,.5);
+  }
+
+  /* BOTTOM PANEL */
+  #bottom-panel {
+    background: var(--surface); border-top: 1px solid var(--border);
+    display: flex; flex-direction: column; max-height: 52vh;
+    transition: max-height .3s ease;
+  }
+  #bottom-panel.collapsed { max-height: 52px; overflow: hidden; }
+
+  #panel-handle {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px; cursor: pointer; user-select: none; min-height: 52px;
+  }
+  #panel-handle-left { display: flex; align-items: center; gap: 10px; }
+  #panel-title { font-weight: 600; font-size: 0.95rem; }
+  #rider-count-badge {
+    background: var(--accent); color: #0f0f0f;
+    font-size: 0.7rem; font-weight: 700;
+    padding: 2px 7px; border-radius: 10px;
+  }
+  #toggle-arrow { color: var(--muted); font-size: 0.8rem; transition: transform .3s; }
+  #bottom-panel.collapsed #toggle-arrow { transform: rotate(180deg); }
+
+  #panel-content { overflow-y: auto; padding: 0 16px 16px; flex: 1; }
+
+  /* RIDERS LIST */
+  #riders-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+  .rider-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; background: var(--surface2);
+    border-radius: var(--radius); border: 1px solid var(--border);
+  }
+  .rider-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+  .rider-name { flex: 1; font-size: 0.9rem; font-weight: 500; }
+  .rider-badge {
+    font-size: 0.7rem; padding: 2px 7px; border-radius: 10px;
+    background: rgba(255,215,0,0.15); color: var(--leader);
+  }
+  .rider-gps { font-size: 0.75rem; color: var(--muted); }
+  .pass-btn {
+    font-size: 0.7rem; padding: 4px 8px; border-radius: 6px;
+    background: transparent; border: 1px solid var(--border);
+    color: var(--muted); cursor: pointer;
+  }
+  .pass-btn:active { background: var(--surface2); }
+
+  /* MUSIC SECTION */
+  #music-section { border-top: 1px solid var(--border); padding-top: 14px; }
+  #music-section h3 { font-size: 0.8rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 10px; }
+
+  #yt-input-row { display: flex; gap: 8px; margin-bottom: 12px; }
+  #yt-url-input {
+    flex: 1; padding: 10px 12px;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: var(--radius); color: var(--text); font-size: 0.85rem;
+    outline: none;
+  }
+  #yt-url-input:focus { border-color: var(--accent); }
+  #yt-load-btn {
+    padding: 10px 14px; background: var(--accent); border: none;
+    border-radius: var(--radius); color: #0f0f0f; font-weight: 600;
+    font-size: 0.85rem; cursor: pointer; white-space: nowrap;
+  }
+
+  #yt-player-container {
+    display: none; border-radius: var(--radius); overflow: hidden;
+    background: #000; aspect-ratio: 16/9; margin-bottom: 10px;
+    border: 1px solid var(--border);
+  }
+  #yt-player-container.visible { display: block; }
+  #yt-player-container iframe { width: 100%; height: 100%; border: none; }
+
+  #music-controls { display: flex; gap: 8px; justify-content: center; }
+  .ctrl-btn {
+    padding: 10px 20px; border-radius: var(--radius);
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); font-size: 1rem; cursor: pointer;
+  }
+  .ctrl-btn:active { opacity: 0.7; }
+
+  #non-leader-music { color: var(--muted); font-size: 0.85rem; text-align: center; padding: 8px 0; }
+
+  /* STATUS BAR */
+  #status-bar {
+    background: var(--surface2); padding: 6px 16px;
+    display: flex; gap: 12px; align-items: center;
+    border-top: 1px solid var(--border); font-size: 0.75rem; color: var(--muted);
+  }
+  #gps-status { display: flex; align-items: center; gap: 4px; }
+  #gps-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  #gps-dot.active { background: #4CAF50; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+  /* LEADER INDICATOR */
+  #leader-banner {
+    display: none; background: rgba(255,215,0,0.12);
+    border-top: 1px solid rgba(255,215,0,0.2);
+    padding: 6px 16px; font-size: 0.78rem;
+    color: var(--leader); text-align: center;
+  }
+  #leader-banner.visible { display: block; }
+
+  /* LEAFLET OVERRIDES */
+  .leaflet-container { background: #1a1a1a; }
+  .rider-marker {
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 50%; border: 2.5px solid #fff;
+    font-weight: 700; color: #fff; font-size: 11px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.6);
+    text-shadow: 0 1px 2px rgba(0,0,0,.8);
+  }
+</style>
+</head>
+<body>
+
+<!-- JOIN SCREEN -->
+<div id="join-screen">
+  <h1>Ride<span>Sync</span></h1>
+  <p>Real-time group ride tracking<br/>with synced music</p>
+  <input id="name-input" type="text" placeholder="Your name" maxlength="20" autocomplete="off"/>
+  <button id="join-btn">Join the Ride 🚴</button>
+</div>
+
+<!-- MAIN APP -->
+<div id="app">
+  <div id="map">
+    <div id="map-el"></div>
+    <button id="center-btn" title="Center on me">📍</button>
+  </div>
+
+  <div id="leader-banner">⭐ You are the leader — you control the music</div>
+
+  <div id="status-bar">
+    <div id="gps-status"><div id="gps-dot"></div><span id="gps-text">Waiting for GPS…</span></div>
+    <span id="speed-text"></span>
+  </div>
+
+  <div id="bottom-panel" class="collapsed">
+    <div id="panel-handle">
+      <div id="panel-handle-left">
+        <span id="panel-title">Riders</span>
+        <span id="rider-count-badge">0</span>
+      </div>
+      <span id="toggle-arrow">▲</span>
+    </div>
+    <div id="panel-content">
+      <div id="riders-list"></div>
+      <div id="music-section">
+        <h3>🎵 Music</h3>
+        <div id="leader-music">
+          <div id="yt-input-row">
+            <input id="yt-url-input" type="text" placeholder="YouTube URL or video ID"/>
+            <button id="yt-load-btn">Load</button>
+          </div>
+          <div id="yt-player-container">
+            <div id="yt-player"></div>
+          </div>
+          <div id="music-controls">
+            <button class="ctrl-btn" id="play-btn">▶ Play</button>
+            <button class="ctrl-btn" id="pause-btn">⏸ Pause</button>
+          </div>
+        </div>
+        <div id="non-leader-music" style="display:none">
+          🎵 Music is controlled by the leader
+          <div id="yt-player-container-follower" style="margin-top:10px; display:none;">
+            <div id="yt-player-follower"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- YouTube IFrame API -->
+<script src="https://www.youtube.com/iframe_api"></script>
+
+<script>
+// ─── State ───────────────────────────────────────────────────────────────────
+let myId = null;
+let isLeader = false;
+let myName = '';
+let map, myMarker;
+let markers = {}; // { socketId: L.Marker }
+let ridersData = {};
+let ytPlayer = null;
+let ytPlayerFollower = null;
+let ytReady = false;
+let ytFollowerReady = false;
+let pendingMusicState = null;
+let wakeLock = null;
+const socket = io();
+
+// ─── Wake Lock ────────────────────────────────────────────────────────────────
+async function acquireWakeLock() {
+  try {
+    if ('wakeLock' in navigator) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      console.log('Wake lock acquired');
+    }
+  } catch (e) { console.warn('Wake lock failed:', e); }
+}
+document.addEventListener('visibilitychange', async () => {
+  if (wakeLock !== null && document.visibilityState === 'visible') {
+    await acquireWakeLock();
+  }
+});
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function extractVideoId(input) {
+  input = input.trim();
+  const patterns = [
+    /(?:v=|\/embed\/|youtu\.be\/|\/v\/|\/shorts\/)([a-zA-Z0-9_-]{11})/,
+    /^([a-zA-Z0-9_-]{11})$/
+  ];
+  for (const p of patterns) {
+    const m = input.match(p);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+function initials(name) {
+  return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
+}
+
+function createMarkerIcon(color, name, isMe) {
+  const size = isMe ? 36 : 30;
+  return L.divIcon({
+    className: '',
+    html: `<div class="rider-marker" style="width:${size}px;height:${size}px;background:${color};${isMe ? 'border-color:' + color + ';box-shadow:0 0 0 3px rgba(255,255,255,0.4),0 2px 8px rgba(0,0,0,.6);' : ''}">${initials(name)}</div>`,
+    iconSize: [size, size],
+    iconAnchor: [size/2, size/2]
+  });
+}
+
+// ─── Map ──────────────────────────────────────────────────────────────────────
+function initMap(lat, lng) {
+  map = L.map('map-el', { zoomControl: false }).setView([lat, lng], 15);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '© OpenStreetMap, © CARTO', maxZoom: 19
+  }).addTo(map);
+  L.control.zoom({ position: 'topright' }).addTo(map);
+  document.getElementById('center-btn').addEventListener('click', () => {
+    if (myMarker) map.setView(myMarker.getLatLng(), 15);
+  });
+}
+
+function setOrUpdateMarker(rider, lat, lng) {
+  const isMe = rider.id === myId;
+  const icon = createMarkerIcon(rider.color, rider.name, isMe);
+  if (markers[rider.id]) {
+    markers[rider.id].setLatLng([lat, lng]).setIcon(icon);
+  } else {
+    markers[rider.id] = L.marker([lat, lng], { icon })
+      .addTo(map)
+      .bindPopup(`<b>${rider.name}</b>${rider.isLeader ? ' ⭐' : ''}`);
+  }
+  if (isMe) myMarker = markers[rider.id];
+}
+
+// ─── GPS ──────────────────────────────────────────────────────────────────────
+function startGPS() {
+  if (!navigator.geolocation) {
+    document.getElementById('gps-text').textContent = 'GPS not supported';
+    return;
+  }
+  let mapInited = false;
+  let lastPos = null;
+
+  navigator.geolocation.watchPosition(pos => {
+    const { latitude: lat, longitude: lng, speed } = pos.coords;
+    document.getElementById('gps-dot').classList.add('active');
+    document.getElementById('gps-text').textContent = 'GPS active';
+    if (speed !== null) {
+      const kmh = (speed * 3.6).toFixed(1);
+      document.getElementById('speed-text').textContent = `${kmh} km/h`;
+    }
+    if (!mapInited) { initMap(lat, lng); mapInited = true; }
+    socket.emit('location', { lat, lng });
+    // Update own marker immediately
+    if (ridersData[myId]) setOrUpdateMarker(ridersData[myId], lat, lng);
+    lastPos = { lat, lng };
+  }, err => {
+    document.getElementById('gps-text').textContent = 'GPS error: ' + err.message;
+  }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 });
+}
+
+// ─── Riders UI ───────────────────────────────────────────────────────────────
+function renderRiders() {
+  const list = document.getElementById('riders-list');
+  const count = Object.keys(ridersData).length;
+  document.getElementById('rider-count-badge').textContent = count;
+  list.innerHTML = '';
+  Object.values(ridersData).forEach(r => {
+    const isMe = r.id === myId;
+    const div = document.createElement('div');
+    div.className = 'rider-item';
+    div.innerHTML = `
+      <div class="rider-dot" style="background:${r.color}"></div>
+      <span class="rider-name">${r.name}${isMe ? ' (you)' : ''}</span>
+      ${r.isLeader ? '<span class="rider-badge">⭐ Leader</span>' : ''}
+      ${(isLeader && !r.isLeader && !isMe) ? `<button class="pass-btn" onclick="passLeader('${r.id}')">Make leader</button>` : ''}
+      <span class="rider-gps">${r.lat ? '📍' : '⏳'}</span>
+    `;
+    list.appendChild(div);
+  });
+}
+
+function passLeader(toId) {
+  socket.emit('pass_leader', { toId });
+}
+
+function updateLeaderUI() {
+  document.getElementById('leader-banner').classList.toggle('visible', isLeader);
+  document.getElementById('leader-music').style.display = isLeader ? 'block' : 'none';
+  document.getElementById('non-leader-music').style.display = isLeader ? 'none' : 'block';
+}
+
+// ─── YouTube Player ───────────────────────────────────────────────────────────
+window.onYouTubeIframeAPIReady = function () {
+  ytPlayer = new YT.Player('yt-player', {
+    height: '100%', width: '100%',
+    playerVars: { autoplay: 0, controls: 1, rel: 0, modestbranding: 1 },
+    events: {
+      onReady: () => { ytReady = true; },
+      onStateChange: (e) => {
+        if (!isLeader) return;
+        if (e.data === YT.PlayerState.PLAYING) {
+          socket.emit('music_play', { timestamp: ytPlayer.getCurrentTime() });
+        } else if (e.data === YT.PlayerState.PAUSED) {
+          socket.emit('music_pause', { timestamp: ytPlayer.getCurrentTime() });
+        }
+      }
+    }
+  });
+
+  ytPlayerFollower = new YT.Player('yt-player-follower', {
+    height: '100%', width: '100%',
+    playerVars: { autoplay: 0, controls: 0, rel: 0, modestbranding: 1 },
+    events: {
+      onReady: () => {
+        ytFollowerReady = true;
+        if (pendingMusicState) applyMusicState(pendingMusicState);
+      }
+    }
+  });
+};
+
+function loadVideo(videoId) {
+  document.getElementById('yt-player-container').classList.add('visible');
+  if (ytReady) ytPlayer.loadVideoById(videoId);
+}
+
+function applyMusicState(state) {
+  if (!state.videoId) return;
+  if (!isLeader) {
+    // Follower player
+    const cont = document.getElementById('yt-player-container-follower');
+    cont.style.display = 'block';
+    if (!ytFollowerReady) { pendingMusicState = state; return; }
+    ytPlayerFollower.loadVideoById({ videoId: state.videoId, startSeconds: state.timestamp });
+    if (state.playing) {
+      ytPlayerFollower.seekTo(state.timestamp, true);
+      ytPlayerFollower.playVideo();
+    } else {
+      ytPlayerFollower.pauseVideo();
+    }
+  }
+}
+
+document.getElementById('yt-load-btn').addEventListener('click', () => {
+  const val = document.getElementById('yt-url-input').value;
+  const videoId = extractVideoId(val);
+  if (!videoId) { alert('Could not find a YouTube video ID in that URL.'); return; }
+  socket.emit('music_load', { videoId });
+  loadVideo(videoId);
+});
+
+document.getElementById('play-btn').addEventListener('click', () => {
+  if (!ytReady || !isLeader) return;
+  const t = ytPlayer.getCurrentTime();
+  ytPlayer.playVideo();
+  socket.emit('music_play', { timestamp: t });
+});
+
+document.getElementById('pause-btn').addEventListener('click', () => {
+  if (!ytReady || !isLeader) return;
+  const t = ytPlayer.getCurrentTime();
+  ytPlayer.pauseVideo();
+  socket.emit('music_pause', { timestamp: t });
+});
+
+// ─── Socket Events ────────────────────────────────────────────────────────────
+socket.on('init', ({ you, riders, musicState }) => {
+  myId = you;
+  ridersData = {};
+  riders.forEach(r => { ridersData[r.id] = r; });
+  isLeader = ridersData[myId]?.isLeader || false;
+  renderRiders();
+  updateLeaderUI();
+  if (musicState?.videoId) applyMusicState(musicState);
+});
+
+socket.on('rider_joined', (rider) => {
+  ridersData[rider.id] = rider;
+  renderRiders();
+});
+
+socket.on('rider_left', (id) => {
+  if (markers[id]) { markers[id].remove(); delete markers[id]; }
+  delete ridersData[id];
+  renderRiders();
+});
+
+socket.on('location_update', ({ id, lat, lng }) => {
+  if (!ridersData[id] || id === myId) return;
+  ridersData[id].lat = lat;
+  ridersData[id].lng = lng;
+  if (map) setOrUpdateMarker(ridersData[id], lat, lng);
+});
+
+socket.on('leader_changed', (leaderId) => {
+  Object.values(ridersData).forEach(r => { r.isLeader = r.id === leaderId; });
+  isLeader = leaderId === myId;
+  renderRiders();
+  updateLeaderUI();
+});
+
+socket.on('music_load', ({ videoId }) => {
+  if (isLeader) return;
+  applyMusicState({ videoId, playing: false, timestamp: 0 });
+});
+
+socket.on('music_play', ({ timestamp }) => {
+  if (isLeader) return;
+  if (ytFollowerReady) {
+    ytPlayerFollower.seekTo(timestamp, true);
+    ytPlayerFollower.playVideo();
+  }
+});
+
+socket.on('music_pause', ({ timestamp }) => {
+  if (isLeader) return;
+  if (ytFollowerReady) {
+    ytPlayerFollower.seekTo(timestamp, true);
+    ytPlayerFollower.pauseVideo();
+  }
+});
+
+socket.on('music_seek', ({ timestamp }) => {
+  if (isLeader) return;
+  if (ytFollowerReady) ytPlayerFollower.seekTo(timestamp, true);
+});
+
+// ─── Panel Toggle ─────────────────────────────────────────────────────────────
+document.getElementById('panel-handle').addEventListener('click', () => {
+  document.getElementById('bottom-panel').classList.toggle('collapsed');
+});
+
+// ─── Join ─────────────────────────────────────────────────────────────────────
+function joinRide() {
+  myName = document.getElementById('name-input').value.trim() || 'Rider';
+  document.getElementById('join-screen').style.display = 'none';
+  document.getElementById('app').classList.add('visible');
+  socket.emit('join', { name: myName });
+  startGPS();
+  acquireWakeLock();
+  // Open panel a bit
+  setTimeout(() => document.getElementById('bottom-panel').classList.remove('collapsed'), 800);
+}
+
+document.getElementById('join-btn').addEventListener('click', joinRide);
+document.getElementById('name-input').addEventListener('keydown', e => { if (e.key === 'Enter') joinRide(); });
+</script>
+</body>
+</html>
