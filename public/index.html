@@ -60,7 +60,7 @@
   }
 
   /* APP */
-  #app { display: none; height: 100%; flex-direction: column; }
+  #app { display: none; height: 100%; flex-direction: column; overflow: hidden; }
   #app.visible { display: flex; }
 
   /* NAV BANNER */
@@ -68,6 +68,7 @@
     display: none; background: rgba(78,205,196,0.1);
     border-bottom: 1px solid rgba(78,205,196,0.2);
     padding: 7px 14px; font-size: 0.82rem; color: var(--accent);
+    flex-shrink: 0;
   }
   #nav-banner.visible { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   #nav-instruction { flex: 1; font-weight: 500; }
@@ -77,8 +78,8 @@
     cursor: pointer; font-weight: 600; white-space: nowrap;
   }
 
-  /* MAP */
-  #map { flex: 1; position: relative; min-height: 0; }
+  /* MAP — takes all remaining vertical space */
+  #map { flex: 1; position: relative; min-height: 0; overflow: hidden; }
   #map-el { width: 100%; height: 100%; }
 
   /* SEARCH BAR */
@@ -159,9 +160,10 @@
   /* BOTTOM PANEL */
   #bottom-panel {
     background: var(--surface); border-top: 1px solid var(--border);
-    display: flex; flex-direction: column; max-height: 55vh; transition: max-height .3s ease;
+    display: flex; flex-direction: column; max-height: 45vh;
+    transition: max-height .3s ease; flex-shrink: 0;
   }
-  #bottom-panel.collapsed { max-height: 52px; overflow: hidden; }
+  #bottom-panel.collapsed { max-height: 48px; overflow: hidden; }
   #panel-handle {
     display: flex; align-items: center; justify-content: space-between;
     padding: 10px 16px; cursor: pointer; user-select: none; min-height: 52px;
@@ -256,33 +258,29 @@
   #install-btn { padding: 10px 16px; background: var(--accent); border: none; border-radius: var(--radius); color: #0f0f0f; font-weight: 700; font-size: 0.85rem; cursor: pointer; white-space: nowrap; }
   #install-dismiss { background: none; border: none; color: var(--muted); font-size: 1.2rem; cursor: pointer; padding: 4px; }
 
-  /* PTT - PUSH TO TALK */
+  /* PTT - PUSH TO TALK — in-flow, not fixed */
   #ptt-bar {
-    position: fixed; bottom: 0; left: 0; right: 0; z-index: 900;
-    padding: 12px 16px 20px; background: var(--surface);
-    border-top: 1px solid var(--border);
-    display: flex; align-items: center; gap: 12px;
-    box-shadow: 0 -2px 12px rgba(0,0,0,.3);
+    background: var(--surface); border-top: 1px solid var(--border);
+    padding: 10px 14px 14px; display: flex; align-items: center; gap: 10px;
+    flex-shrink: 0;
   }
   #ptt-btn {
-    flex: 1; padding: 16px; border-radius: var(--radius);
+    flex: 1; padding: 14px; border-radius: var(--radius);
     background: var(--surface2); border: 2px solid var(--border);
-    color: var(--text); font-size: 1rem; font-weight: 700;
+    color: var(--text); font-size: 0.95rem; font-weight: 700;
     cursor: pointer; user-select: none; -webkit-user-select: none;
-    transition: background .1s, border-color .1s, transform .1s;
+    transition: background .1s, border-color .1s;
     display: flex; align-items: center; justify-content: center; gap: 8px;
+    -webkit-tap-highlight-color: transparent;
   }
-  #ptt-btn.talking {
-    background: rgba(255,107,107,0.2); border-color: #FF6B6B;
-    transform: scale(0.98);
-  }
+  #ptt-btn.talking { background: rgba(255,107,107,0.2); border-color: #FF6B6B; }
   #ptt-mute-btn {
-    width: 50px; height: 50px; border-radius: 50%;
+    width: 46px; height: 46px; border-radius: 50%;
     background: var(--surface2); border: 1px solid var(--border);
     color: var(--text); font-size: 1.1rem; cursor: pointer;
     display: flex; align-items: center; justify-content: center; flex-shrink: 0;
   }
-  #ptt-mute-btn.muted { background: rgba(255,107,107,0.2); border-color: #FF6B6B; }
+  #ptt-mute-btn.muted { background: rgba(255,107,107,0.15); border-color: #FF6B6B; }
 
   /* INCOMING VOICE TOAST */
   #voice-toast {
@@ -1074,83 +1072,83 @@ socket.on('music_next',()=>{ if(!isLeader&&ytFollowerReady) ytFollower.nextVideo
 socket.on('music_prev',()=>{ if(!isLeader&&ytFollowerReady) ytFollower.previousVideo(); });
 
 // ─── Push-to-Talk ─────────────────────────────────────────────────────────────
-let pttStream = null;
-let pttRecorder = null;
-let pttMuted = false;
-let isTalking = false;
-let incomingAudioQueue = Promise.resolve();
-let audioContext = null;
+let pttStream = null, pttRecorder = null;
+let pttMuted = false, isTalking = false;
+let audioCtx = null;
 let musicDucked = false;
+// Queue so chunks play in order without overlap
+let audioQueue = Promise.resolve();
 
 function getAudioCtx(){
-  if(!audioContext) audioContext = new (window.AudioContext||window.webkitAudioContext)();
-  return audioContext;
+  if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
 }
 
-// Duck music volume when someone talks
 function duckMusic(on){
   if(musicDucked === on) return;
   musicDucked = on;
-  try {
-    // Lower YouTube iframe volume via postMessage
-    const iframes = document.querySelectorAll('#yt-hidden iframe');
-    iframes.forEach(f => {
-      f.contentWindow?.postMessage(JSON.stringify({
-        event:'command', func: on ? 'setVolume' : 'setVolume',
-        args: [on ? 20 : 100]
-      }), '*');
-    });
-    // Also directly if player objects are available
-    if(ytPlayer?.setVolume) ytPlayer.setVolume(on ? 20 : 100);
-    if(ytFollower?.setVolume) ytFollower.setVolume(on ? 20 : 100);
-  } catch(e){}
+  const vol = on ? 15 : 100;
+  try { if(ytPlayer?.setVolume) ytPlayer.setVolume(vol); } catch(e){}
+  try { if(ytFollower?.setVolume) ytFollower.setVolume(vol); } catch(e){}
+}
+
+// Choose best supported mimeType
+function getBestMimeType(){
+  const types = ['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus','audio/ogg'];
+  return types.find(t => MediaRecorder.isTypeSupported(t)) || '';
 }
 
 async function startPTT(){
   if(isTalking) return;
   try {
-    pttStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    isTalking = true;
-    document.getElementById('ptt-btn').classList.add('talking');
-    document.getElementById('ptt-btn').textContent = '🔴 Talking…';
-    socket.emit('ptt_start');
-    duckMusic(true);
-
-    pttRecorder = new MediaRecorder(pttStream, { mimeType: 'audio/webm;codecs=opus' });
-    pttRecorder.ondataavailable = e => {
-      if(e.data.size > 0){
-        const reader = new FileReader();
-        reader.onload = () => socket.emit('ptt_chunk', reader.result);
-        reader.readAsArrayBuffer(e.data);
-      }
-    };
-    pttRecorder.start(200); // emit chunks every 200ms
+    pttStream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
   } catch(err){
-    alert('Microphone access denied. Please allow mic in your browser settings.');
+    alert('Microphone access denied. Please allow mic in your browser/phone settings.');
+    return;
   }
+  isTalking = true;
+  const btn = document.getElementById('ptt-btn');
+  btn.classList.add('talking');
+  btn.innerHTML = '🔴 Talking…';
+  socket.emit('ptt_start');
+  duckMusic(true);
+
+  const mime = getBestMimeType();
+  pttRecorder = new MediaRecorder(pttStream, mime ? { mimeType: mime } : {});
+  pttRecorder.ondataavailable = e => {
+    if(e.data && e.data.size > 0){
+      // Convert blob to base64 so it survives the socket trip
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        // reader.result is "data:audio/webm;base64,AAAA..."
+        socket.emit('ptt_chunk', reader.result);
+      };
+      reader.readAsDataURL(e.data);
+    }
+  };
+  pttRecorder.start(150); // 150ms chunks — low latency
 }
 
 function stopPTT(){
   if(!isTalking) return;
   isTalking = false;
-  document.getElementById('ptt-btn').classList.remove('talking');
-  document.getElementById('ptt-btn').textContent = '🎙 Hold to Talk';
+  const btn = document.getElementById('ptt-btn');
+  btn.classList.remove('talking');
+  btn.innerHTML = '🎙 Hold to Talk';
   socket.emit('ptt_stop');
   duckMusic(false);
   if(pttRecorder && pttRecorder.state !== 'inactive') pttRecorder.stop();
-  if(pttStream) { pttStream.getTracks().forEach(t => t.stop()); pttStream = null; }
+  if(pttStream){ pttStream.getTracks().forEach(t => t.stop()); pttStream = null; }
 }
 
-// PTT button — hold to talk (touch + mouse)
 const pttBtn = document.getElementById('ptt-btn');
 pttBtn.addEventListener('mousedown', startPTT);
-pttBtn.addEventListener('touchstart', e => { e.preventDefault(); startPTT(); }, { passive: false });
+pttBtn.addEventListener('touchstart', e => { e.preventDefault(); startPTT(); }, { passive:false });
 pttBtn.addEventListener('mouseup', stopPTT);
 pttBtn.addEventListener('mouseleave', stopPTT);
-pttBtn.addEventListener('touchend', stopPTT);
+pttBtn.addEventListener('touchend', e => { e.preventDefault(); stopPTT(); }, { passive:false });
 pttBtn.addEventListener('touchcancel', stopPTT);
 
-// Mute button
 document.getElementById('ptt-mute-btn').addEventListener('click', () => {
   pttMuted = !pttMuted;
   const btn = document.getElementById('ptt-mute-btn');
@@ -1158,32 +1156,42 @@ document.getElementById('ptt-mute-btn').addEventListener('click', () => {
   btn.classList.toggle('muted', pttMuted);
 });
 
-// Incoming voice
+// ── Incoming voice ────────────────────────────────────────────────────────────
 socket.on('ptt_start', ({ id, name, color }) => {
   if(pttMuted) return;
   duckMusic(true);
-  const toast = document.getElementById('voice-toast');
-  document.getElementById('voice-toast-name').textContent = `${name} is talking…`;
-  toast.style.borderLeft = `3px solid ${color}`;
-  toast.classList.add('visible');
+  document.getElementById('voice-toast-name').textContent = name + ' is talking…';
+  document.getElementById('voice-toast').style.borderLeft = `3px solid ${color}`;
+  document.getElementById('voice-toast').classList.add('visible');
 });
 
-socket.on('ptt_chunk', async ({ id, chunk }) => {
+socket.on('ptt_chunk', ({ id, chunk }) => {
   if(pttMuted) return;
-  incomingAudioQueue = incomingAudioQueue.then(async () => {
+  // chunk is a base64 data URL — decode and play via Web Audio
+  audioQueue = audioQueue.then(() => new Promise(resolve => {
     try {
       const ctx = getAudioCtx();
-      if(ctx.state === 'suspended') await ctx.resume();
-      const buf = await ctx.decodeAudioData(chunk.slice(0)); // slice = copy ArrayBuffer
-      const source = ctx.createBufferSource();
-      source.buffer = buf;
-      source.connect(ctx.destination);
-      source.start();
-    } catch(e){ /* chunk decode error - skip */ }
-  });
+      // Resume AudioContext if suspended (browser autoplay policy)
+      const play = () => {
+        // Strip data URL prefix to get raw base64
+        const base64 = chunk.split(',')[1];
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for(let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        ctx.decodeAudioData(bytes.buffer.slice(0)).then(buf => {
+          const src = ctx.createBufferSource();
+          src.buffer = buf;
+          src.connect(ctx.destination);
+          src.onended = resolve;
+          src.start();
+        }).catch(() => resolve()); // bad chunk — skip and continue
+      };
+      if(ctx.state === 'suspended'){ ctx.resume().then(play); } else { play(); }
+    } catch(e){ resolve(); }
+  }));
 });
 
-socket.on('ptt_stop', ({ id }) => {
+socket.on('ptt_stop', () => {
   duckMusic(false);
   document.getElementById('voice-toast').classList.remove('visible');
 });

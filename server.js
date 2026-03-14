@@ -105,13 +105,14 @@ io.on('connection', (socket) => {
     io.emit('music_prev', {});
   });
 
-  // Push-to-talk
+  // Push-to-talk — relay to all other riders
   socket.on('ptt_start', () => {
     if (!riders[socket.id]) return;
     socket.broadcast.emit('ptt_start', { id: socket.id, name: riders[socket.id].name, color: riders[socket.id].color });
   });
   socket.on('ptt_chunk', (chunk) => {
-    if (!riders[socket.id]) return;
+    // chunk is a base64 data URL string — relay as-is
+    if (!riders[socket.id] || typeof chunk !== 'string') return;
     socket.broadcast.emit('ptt_chunk', { id: socket.id, chunk });
   });
   socket.on('ptt_stop', () => {
@@ -157,5 +158,3 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`Ride app running on http://localhost:${PORT}`));
-
-
