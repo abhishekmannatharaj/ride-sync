@@ -4,7 +4,13 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="RideSync"/>
+<meta name="mobile-web-app-capable" content="yes"/>
 <meta name="theme-color" content="#0f0f0f"/>
+<meta name="description" content="Real-time group ride tracker with navigation and synced music"/>
+<link rel="manifest" href="/manifest.json"/>
+<link rel="apple-touch-icon" href="/icons/icon-192.png"/>
 <title>RideSync</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -16,7 +22,21 @@
     --border: rgba(255,255,255,0.08); --text: #f0f0f0; --muted: #888;
     --accent: #4ECDC4; --leader: #FFD700; --danger: #FF6B6B; --radius: 12px;
   }
-  html, body { height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; overflow: hidden; }
+  body.light {
+    --bg: #f4f4f4; --surface: #ffffff; --surface2: #f0f0f0;
+    --border: rgba(0,0,0,0.1); --text: #111111; --muted: #666;
+  }
+  html, body { height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; overflow: hidden; transition: background .3s, color .3s; }
+
+  /* MAP THEME TOGGLE BUTTON */
+  #map-theme-btn {
+    position: absolute; left: 12px; bottom: 16px; z-index: 500;
+    width: 44px; height: 44px; border-radius: 50%;
+    background: var(--surface); border: 1px solid var(--border);
+    color: var(--text); font-size: 1.1rem; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 2px 12px rgba(0,0,0,.4);
+  }
 
   /* JOIN */
   #join-screen {
@@ -192,6 +212,27 @@
   .mctrl:active { opacity: 0.7; }
   #follower-music { color: var(--muted); font-size: 0.85rem; text-align: center; padding: 6px 0 2px; }
 
+  /* RECENTLY PLAYED */
+  #recent-section { margin-bottom: 10px; }
+  #recent-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+  .recent-item {
+    display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: var(--radius); cursor: pointer; transition: border-color .15s;
+  }
+  .recent-item:hover { border-color: var(--accent); }
+  .recent-icon { font-size: 1rem; flex-shrink: 0; }
+  .recent-name { flex: 1; font-size: 0.85rem; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .recent-play { font-size: 0.75rem; color: var(--accent); font-weight: 600; flex-shrink: 0; }
+  #open-ytmusic-btn {
+    width: 100%; padding: 11px; border-radius: var(--radius);
+    background: transparent; border: 1px solid var(--border);
+    color: var(--text); font-size: 0.85rem; font-weight: 500;
+    cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
+    margin-top: 8px; transition: border-color .15s, background .15s;
+  }
+  #open-ytmusic-btn:hover { border-color: var(--accent); background: var(--surface2); }
+
   /* LEAFLET */
   .leaflet-container { background: #1a1a1a; }
   .rider-marker { display: flex; align-items: center; justify-content: center; border-radius: 50%; border: 2.5px solid #fff; font-weight: 700; color: #fff; font-size: 11px; box-shadow: 0 2px 8px rgba(0,0,0,.6); text-shadow: 0 1px 2px rgba(0,0,0,.8); }
@@ -233,6 +274,7 @@
     <button id="clear-dest-btn" title="Clear destination">✕ dest</button>
     <button id="dest-mode-btn" title="Tap map to pin destination">🏁</button>
     <button id="center-btn" title="Center on me">📍</button>
+    <button id="map-theme-btn" title="Toggle map theme">🌙</button>
   </div>
 
   <div id="leader-banner">⭐ You are the leader — search or tap 🏁 to set destination</div>
@@ -280,6 +322,15 @@
             <input id="yt-url-input" type="text" placeholder="Paste YouTube playlist or video URL"/>
             <button id="yt-load-btn">Load</button>
           </div>
+          <!-- Recently played -->
+          <div id="recent-section" style="display:none">
+            <div style="font-size:0.75rem;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Recently played</div>
+            <div id="recent-list"></div>
+          </div>
+          <!-- Open YT Music button -->
+          <button id="open-ytmusic-btn">
+            <span>▶</span> Open YouTube Music to pick a playlist
+          </button>
           <div id="audio-player-card">
             <div id="track-title">Loading…</div>
             <div id="track-sub">YouTube playlist · audio only</div>
@@ -373,11 +424,37 @@ function destIcon(){
 }
 
 // ─── Map Init ─────────────────────────────────────────────────────────────────
+// ─── Map Theme ────────────────────────────────────────────────────────────────
+const MAP_TILES = {
+  dark:  'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+  light: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
+};
+let mapTheme = localStorage.getItem('mapTheme') || 'dark';
+let tileLayer = null;
+
+function applyMapTheme(theme){
+  mapTheme = theme;
+  localStorage.setItem('mapTheme', theme);
+  const isLight = theme === 'light';
+  document.body.classList.toggle('light', isLight);
+  document.getElementById('map-theme-btn').textContent = isLight ? '🌙' : '☀️';
+  if(map && tileLayer){
+    tileLayer.setUrl(MAP_TILES[theme]);
+  }
+}
+
+document.getElementById('map-theme-btn').addEventListener('click', ()=>{
+  applyMapTheme(mapTheme === 'dark' ? 'light' : 'dark');
+});
+
+// Apply saved theme on load
+(()=>{ applyMapTheme(mapTheme); })();
+
 let pendingMarkers = []; // riders to draw once map exists
 
 function initMap(lat,lng){
   map=L.map('map-el',{zoomControl:false}).setView([lat,lng],15);
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
+  tileLayer = L.tileLayer(MAP_TILES[mapTheme],{
     attribution:'© OpenStreetMap, © CARTO',maxZoom:19
   }).addTo(map);
   L.control.zoom({position:'topright'}).addTo(map);
@@ -600,6 +677,7 @@ function updateLeaderUI(){
   document.getElementById('dest-coords-el').textContent=destination
     ?`${destination.lat.toFixed(5)}, ${destination.lng.toFixed(5)}`
     :(isLeader?'Search or tap 🏁 to set destination':'Leader sets the destination for the group');
+  if(isLeader) renderRecentList();
 }
 
 // ─── YouTube Audio-Only Player ────────────────────────────────────────────────
@@ -697,6 +775,46 @@ function startProgressTimer(who){
 }
 function stopProgressTimer(){ if(progressTimer){clearInterval(progressTimer);progressTimer=null;} }
 
+// ─── Recently Played ─────────────────────────────────────────────────────────
+const RECENT_KEY = 'ridesync_recent_v1';
+const MAX_RECENT = 5;
+
+function getRecent(){
+  try { return JSON.parse(localStorage.getItem(RECENT_KEY)||'[]'); } catch(e){ return []; }
+}
+
+function saveRecent(url, name){
+  let list = getRecent().filter(r => r.url !== url); // remove duplicate
+  list.unshift({ url, name: name||url, ts: Date.now() });
+  list = list.slice(0, MAX_RECENT);
+  localStorage.setItem(RECENT_KEY, JSON.stringify(list));
+  renderRecentList();
+}
+
+function renderRecentList(){
+  if(!isLeader) return;
+  const list = getRecent();
+  const section = document.getElementById('recent-section');
+  const el = document.getElementById('recent-list');
+  if(!list.length){ section.style.display='none'; return; }
+  section.style.display='block';
+  el.innerHTML = '';
+  list.forEach(item => {
+    const div = document.createElement('div');
+    div.className = 'recent-item';
+    div.innerHTML = `
+      <span class="recent-icon">🎵</span>
+      <span class="recent-name">${item.name}</span>
+      <span class="recent-play">▶ Play</span>
+    `;
+    div.addEventListener('click', ()=>{
+      document.getElementById('yt-url-input').value = item.url;
+      loadMusic(item.url);
+    });
+    el.appendChild(div);
+  });
+}
+
 function loadMusic(url){
   const listId=extractPlaylistId(url);
   const videoId=extractVideoId(url);
@@ -704,12 +822,25 @@ function loadMusic(url){
   if(listId){
     if(ytReady) ytPlayer.loadPlaylist({list:listId,listType:'playlist',index:0});
     socket.emit('music_load',{listId,timestamp:0});
+    // Save to recently played — fetch playlist name from YT oEmbed if possible
+    fetchPlaylistName(url).then(name => saveRecent(url, name));
   } else if(videoId){
     if(ytReady) ytPlayer.loadVideoById(videoId,0);
     socket.emit('music_load',{videoId,timestamp:0});
+    fetchPlaylistName(url).then(name => saveRecent(url, name));
   } else {
     alert('Could not find a YouTube video or playlist in that URL.');
   }
+}
+
+async function fetchPlaylistName(url){
+  try {
+    const res = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`);
+    if(res.ok){ const d=await res.json(); return d.title||url; }
+  } catch(e){}
+  // Fallback: show cleaned URL
+  const listId=extractPlaylistId(url);
+  return listId ? `Playlist · ${listId.slice(0,12)}…` : url.slice(0,40);
 }
 
 function applyMusic(state){
@@ -779,6 +910,11 @@ document.getElementById('next-btn').addEventListener('click',()=>{
   if(!ytReady||!isLeader)return;
   ytPlayer.nextVideo();
   socket.emit('music_next',{});
+});
+
+// Open YouTube Music in browser — user picks a playlist there, comes back and pastes URL
+document.getElementById('open-ytmusic-btn').addEventListener('click',()=>{
+  window.open('https://music.youtube.com', '_blank');
 });
 
 // ─── Socket ───────────────────────────────────────────────────────────────────
@@ -872,6 +1008,15 @@ function joinRide(){
 }
 document.getElementById('join-btn').addEventListener('click',joinRide);
 document.getElementById('name-input').addEventListener('keydown',e=>{if(e.key==='Enter')joinRide();});
+
+// ─── Service Worker (PWA) ─────────────────────────────────────────────────────
+if('serviceWorker' in navigator){
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js')
+      .then(reg => console.log('SW registered:', reg.scope))
+      .catch(err => console.warn('SW failed:', err));
+  });
+}
 </script>
 </body>
 </html>
