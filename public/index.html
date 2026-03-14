@@ -240,6 +240,63 @@
   .leaflet-popup-tip { background: var(--surface); }
   .leaflet-popup-content { font-family: -apple-system, sans-serif; font-size: 13px; line-height: 1.5; }
   .popup-nav-btn { display: block; width: 100%; margin-top: 8px; padding: 8px; background: var(--accent); border: none; border-radius: 8px; color: #0f0f0f; font-weight: 600; font-size: 0.8rem; cursor: pointer; text-align: center; }
+
+  /* PWA INSTALL BANNER */
+  #install-banner {
+    display: none; position: fixed; bottom: 0; left: 0; right: 0; z-index: 2000;
+    background: var(--surface); border-top: 1px solid var(--border);
+    padding: 14px 16px; gap: 12px; align-items: center;
+    box-shadow: 0 -4px 20px rgba(0,0,0,.4);
+  }
+  #install-banner.visible { display: flex; }
+  #install-banner .install-icon { font-size: 1.6rem; flex-shrink: 0; }
+  #install-banner .install-text { flex: 1; }
+  #install-banner .install-text strong { display: block; font-size: 0.9rem; }
+  #install-banner .install-text span { font-size: 0.78rem; color: var(--muted); }
+  #install-btn { padding: 10px 16px; background: var(--accent); border: none; border-radius: var(--radius); color: #0f0f0f; font-weight: 700; font-size: 0.85rem; cursor: pointer; white-space: nowrap; }
+  #install-dismiss { background: none; border: none; color: var(--muted); font-size: 1.2rem; cursor: pointer; padding: 4px; }
+
+  /* PTT - PUSH TO TALK */
+  #ptt-bar {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 900;
+    padding: 12px 16px 20px; background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px;
+    box-shadow: 0 -2px 12px rgba(0,0,0,.3);
+  }
+  #ptt-btn {
+    flex: 1; padding: 16px; border-radius: var(--radius);
+    background: var(--surface2); border: 2px solid var(--border);
+    color: var(--text); font-size: 1rem; font-weight: 700;
+    cursor: pointer; user-select: none; -webkit-user-select: none;
+    transition: background .1s, border-color .1s, transform .1s;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  #ptt-btn.talking {
+    background: rgba(255,107,107,0.2); border-color: #FF6B6B;
+    transform: scale(0.98);
+  }
+  #ptt-mute-btn {
+    width: 50px; height: 50px; border-radius: 50%;
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); font-size: 1.1rem; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  #ptt-mute-btn.muted { background: rgba(255,107,107,0.2); border-color: #FF6B6B; }
+
+  /* INCOMING VOICE TOAST */
+  #voice-toast {
+    display: none; position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
+    z-index: 800; background: rgba(0,0,0,.75); color: #fff;
+    padding: 8px 18px; border-radius: 20px; font-size: 0.85rem; font-weight: 600;
+    white-space: nowrap; pointer-events: none; backdrop-filter: blur(4px);
+  }
+  #voice-toast.visible { display: flex; align-items: center; gap: 8px; }
+  .voice-wave { display: flex; gap: 2px; align-items: center; height: 14px; }
+  .voice-wave span { display: block; width: 3px; background: var(--accent); border-radius: 2px; animation: wave .6s ease-in-out infinite; }
+  .voice-wave span:nth-child(2) { animation-delay: .1s; }
+  .voice-wave span:nth-child(3) { animation-delay: .2s; }
+  @keyframes wave { 0%,100%{height:4px} 50%{height:14px} }
 </style>
 </head>
 <body>
@@ -364,6 +421,30 @@
 
     </div>
   </div>
+
+  <!-- PUSH TO TALK BAR -->
+  <div id="ptt-bar">
+    <button id="ptt-mute-btn" title="Mute/unmute incoming voice">🔊</button>
+    <button id="ptt-btn">🎙 Hold to Talk</button>
+  </div>
+
+</div>
+
+<!-- INCOMING VOICE TOAST -->
+<div id="voice-toast">
+  <div class="voice-wave"><span></span><span></span><span></span></div>
+  <span id="voice-toast-name">Someone is talking…</span>
+</div>
+
+<!-- PWA INSTALL BANNER -->
+<div id="install-banner">
+  <div class="install-icon">🚴</div>
+  <div class="install-text">
+    <strong>Install RideSync</strong>
+    <span>Add to home screen for best experience</span>
+  </div>
+  <button id="install-btn">Install</button>
+  <button id="install-dismiss">✕</button>
 </div>
 
 <script src="https://www.youtube.com/iframe_api"></script>
@@ -992,6 +1073,121 @@ socket.on('music_pause',({timestamp})=>{
 socket.on('music_next',()=>{ if(!isLeader&&ytFollowerReady) ytFollower.nextVideo(); });
 socket.on('music_prev',()=>{ if(!isLeader&&ytFollowerReady) ytFollower.previousVideo(); });
 
+// ─── Push-to-Talk ─────────────────────────────────────────────────────────────
+let pttStream = null;
+let pttRecorder = null;
+let pttMuted = false;
+let isTalking = false;
+let incomingAudioQueue = Promise.resolve();
+let audioContext = null;
+let musicDucked = false;
+
+function getAudioCtx(){
+  if(!audioContext) audioContext = new (window.AudioContext||window.webkitAudioContext)();
+  return audioContext;
+}
+
+// Duck music volume when someone talks
+function duckMusic(on){
+  if(musicDucked === on) return;
+  musicDucked = on;
+  try {
+    // Lower YouTube iframe volume via postMessage
+    const iframes = document.querySelectorAll('#yt-hidden iframe');
+    iframes.forEach(f => {
+      f.contentWindow?.postMessage(JSON.stringify({
+        event:'command', func: on ? 'setVolume' : 'setVolume',
+        args: [on ? 20 : 100]
+      }), '*');
+    });
+    // Also directly if player objects are available
+    if(ytPlayer?.setVolume) ytPlayer.setVolume(on ? 20 : 100);
+    if(ytFollower?.setVolume) ytFollower.setVolume(on ? 20 : 100);
+  } catch(e){}
+}
+
+async function startPTT(){
+  if(isTalking) return;
+  try {
+    pttStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    isTalking = true;
+    document.getElementById('ptt-btn').classList.add('talking');
+    document.getElementById('ptt-btn').textContent = '🔴 Talking…';
+    socket.emit('ptt_start');
+    duckMusic(true);
+
+    pttRecorder = new MediaRecorder(pttStream, { mimeType: 'audio/webm;codecs=opus' });
+    pttRecorder.ondataavailable = e => {
+      if(e.data.size > 0){
+        const reader = new FileReader();
+        reader.onload = () => socket.emit('ptt_chunk', reader.result);
+        reader.readAsArrayBuffer(e.data);
+      }
+    };
+    pttRecorder.start(200); // emit chunks every 200ms
+  } catch(err){
+    alert('Microphone access denied. Please allow mic in your browser settings.');
+  }
+}
+
+function stopPTT(){
+  if(!isTalking) return;
+  isTalking = false;
+  document.getElementById('ptt-btn').classList.remove('talking');
+  document.getElementById('ptt-btn').textContent = '🎙 Hold to Talk';
+  socket.emit('ptt_stop');
+  duckMusic(false);
+  if(pttRecorder && pttRecorder.state !== 'inactive') pttRecorder.stop();
+  if(pttStream) { pttStream.getTracks().forEach(t => t.stop()); pttStream = null; }
+}
+
+// PTT button — hold to talk (touch + mouse)
+const pttBtn = document.getElementById('ptt-btn');
+pttBtn.addEventListener('mousedown', startPTT);
+pttBtn.addEventListener('touchstart', e => { e.preventDefault(); startPTT(); }, { passive: false });
+pttBtn.addEventListener('mouseup', stopPTT);
+pttBtn.addEventListener('mouseleave', stopPTT);
+pttBtn.addEventListener('touchend', stopPTT);
+pttBtn.addEventListener('touchcancel', stopPTT);
+
+// Mute button
+document.getElementById('ptt-mute-btn').addEventListener('click', () => {
+  pttMuted = !pttMuted;
+  const btn = document.getElementById('ptt-mute-btn');
+  btn.textContent = pttMuted ? '🔇' : '🔊';
+  btn.classList.toggle('muted', pttMuted);
+});
+
+// Incoming voice
+socket.on('ptt_start', ({ id, name, color }) => {
+  if(pttMuted) return;
+  duckMusic(true);
+  const toast = document.getElementById('voice-toast');
+  document.getElementById('voice-toast-name').textContent = `${name} is talking…`;
+  toast.style.borderLeft = `3px solid ${color}`;
+  toast.classList.add('visible');
+});
+
+socket.on('ptt_chunk', async ({ id, chunk }) => {
+  if(pttMuted) return;
+  incomingAudioQueue = incomingAudioQueue.then(async () => {
+    try {
+      const ctx = getAudioCtx();
+      if(ctx.state === 'suspended') await ctx.resume();
+      const buf = await ctx.decodeAudioData(chunk.slice(0)); // slice = copy ArrayBuffer
+      const source = ctx.createBufferSource();
+      source.buffer = buf;
+      source.connect(ctx.destination);
+      source.start();
+    } catch(e){ /* chunk decode error - skip */ }
+  });
+});
+
+socket.on('ptt_stop', ({ id }) => {
+  duckMusic(false);
+  document.getElementById('voice-toast').classList.remove('visible');
+});
+
 // ─── Panel ────────────────────────────────────────────────────────────────────
 document.getElementById('panel-handle').addEventListener('click',()=>{
   document.getElementById('bottom-panel').classList.toggle('collapsed');
@@ -1009,14 +1205,50 @@ function joinRide(){
 document.getElementById('join-btn').addEventListener('click',joinRide);
 document.getElementById('name-input').addEventListener('keydown',e=>{if(e.key==='Enter')joinRide();});
 
-// ─── Service Worker (PWA) ─────────────────────────────────────────────────────
+// ─── PWA Install ──────────────────────────────────────────────────────────────
+let deferredInstallPrompt = null;
+
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  // Show banner after a short delay so it doesn't interrupt loading
+  setTimeout(() => {
+    if(!localStorage.getItem('pwa_dismissed')){
+      document.getElementById('install-banner').classList.add('visible');
+    }
+  }, 3000);
+});
+
+document.getElementById('install-btn').addEventListener('click', async () => {
+  if(!deferredInstallPrompt) return;
+  document.getElementById('install-banner').classList.remove('visible');
+  deferredInstallPrompt.prompt();
+  const { outcome } = await deferredInstallPrompt.userChoice;
+  if(outcome === 'accepted') console.log('PWA installed');
+  deferredInstallPrompt = null;
+});
+
+document.getElementById('install-dismiss').addEventListener('click', () => {
+  document.getElementById('install-banner').classList.remove('visible');
+  localStorage.setItem('pwa_dismissed', '1');
+});
+
+window.addEventListener('appinstalled', () => {
+  document.getElementById('install-banner').classList.remove('visible');
+  deferredInstallPrompt = null;
+  console.log('App installed successfully');
+});
+
+// ─── Service Worker ───────────────────────────────────────────────────────────
 if('serviceWorker' in navigator){
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js')
-      .then(reg => console.log('SW registered:', reg.scope))
-      .catch(err => console.warn('SW failed:', err));
-  });
+  navigator.serviceWorker.register('/sw.js', { scope: '/' })
+    .then(reg => {
+      console.log('SW registered, scope:', reg.scope);
+      reg.update(); // force check for SW updates
+    })
+    .catch(err => console.warn('SW registration failed:', err));
 }
+
 </script>
 </body>
 </html>
