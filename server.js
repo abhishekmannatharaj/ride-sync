@@ -20,6 +20,8 @@ let musicState = {
   syncedAt: Date.now()
 };
 
+let destinationState = null; // { lat, lng, name }
+
 const COLORS = [
   '#FF6B6B','#4ECDC4','#45B7D1','#96CEB4',
   '#FFEAA7','#DDA0DD','#98D8C8','#F7DC6F',
@@ -56,21 +58,27 @@ io.on('connection', (socket) => {
       riders: Object.values(riders),
       musicState: {
         ...musicState,
-        // Adjust timestamp for time elapsed since sync
         timestamp: musicState.playing
           ? musicState.timestamp + (Date.now() - musicState.syncedAt) / 1000
           : musicState.timestamp
-      }
+      },
+      destinationState
     });
 
     // Tell everyone else about new rider
     socket.broadcast.emit('rider_joined', riders[socket.id]);
 
-    // If no leader exists and this is a new rider, assign them
+    // If no leader exists, assign this rider
     if (!getLeader()) {
       riders[socket.id].isLeader = true;
       io.emit('leader_changed', socket.id);
     }
+
+    // Push all known positions to the new rider so they see everyone immediately
+    const positions = Object.values(riders)
+      .filter(r => r.lat !== null && r.id !== socket.id)
+      .map(r => ({ id: r.id, lat: r.lat, lng: r.lng }));
+    if (positions.length > 0) socket.emit('bulk_locations', positions);
   });
 
   // Location update
@@ -113,6 +121,29 @@ io.on('connection', (socket) => {
     riders[socket.id].isLeader = false;
     riders[toId].isLeader = true;
     io.emit('leader_changed', toId);
+  });
+
+  socket.on('music_next', () => {
+    if (!riders[socket.id]?.isLeader) return;
+    io.emit('music_next', {});
+  });
+
+  socket.on('music_prev', () => {
+    if (!riders[socket.id]?.isLeader) return;
+    io.emit('music_prev', {});
+  });
+
+  // Destination (leader only)
+  socket.on('set_destination', ({ lat, lng, name }) => {
+    if (!riders[socket.id]?.isLeader) return;
+    destinationState = { lat, lng, name: name || `${lat.toFixed(5)}, ${lng.toFixed(5)}` };
+    io.emit('destination_set', destinationState);
+  });
+
+  socket.on('clear_destination', () => {
+    if (!riders[socket.id]?.isLeader) return;
+    destinationState = null;
+    io.emit('destination_cleared');
   });
 
   // Disconnect
