@@ -7,7 +7,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: '*' },
-  maxHttpBufferSize: 1e6 // 1MB for audio chunks
+  maxHttpBufferSize: 5e6  // 5MB — enough for ~10 seconds of speech
 });
 
 // Critical: correct MIME types so PWA installs properly
@@ -105,15 +105,15 @@ io.on('connection', (socket) => {
     io.emit('music_prev', {});
   });
 
-  // Push-to-talk — relay to all other riders
+  // Push-to-talk
   socket.on('ptt_start', () => {
     if (!riders[socket.id]) return;
     socket.broadcast.emit('ptt_start', { id: socket.id, name: riders[socket.id].name, color: riders[socket.id].color });
   });
-  socket.on('ptt_chunk', (chunk) => {
-    // chunk is a base64 data URL string — relay as-is
-    if (!riders[socket.id] || typeof chunk !== 'string') return;
-    socket.broadcast.emit('ptt_chunk', { id: socket.id, chunk });
+  socket.on('ptt_audio', ({ dataUrl }) => {
+    // dataUrl is a base64 string — validate and relay
+    if (!riders[socket.id] || typeof dataUrl !== 'string') return;
+    socket.broadcast.emit('ptt_audio', { id: socket.id, dataUrl });
   });
   socket.on('ptt_stop', () => {
     if (!riders[socket.id]) return;

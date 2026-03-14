@@ -203,16 +203,26 @@
   #yt-hidden { position: absolute; left: -9999px; top: -9999px; width: 1px; height: 1px; pointer-events: none; }
   #audio-player-card { display: none; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 4px; }
   #audio-player-card.on { display: block; }
-  #track-title { font-size: 0.9rem; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #track-sub { font-size: 0.75rem; color: var(--muted); margin-top: 3px; margin-bottom: 12px; }
-  #progress-bar-bg { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; margin-bottom: 4px; }
-  #progress-bar-fill { height: 100%; background: var(--accent); border-radius: 2px; width: 0%; transition: width .5s linear; }
-  #time-row { display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--muted); margin-bottom: 12px; }
-  #music-controls { display: flex; align-items: center; justify-content: center; gap: 10px; }
+  #audio-player-card-follower { display: none; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 8px; }
+  #audio-player-card-follower.on { display: block; }
+  #track-title, #track-title-f { font-size: 0.9rem; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #track-sub, #track-sub-f { font-size: 0.75rem; color: var(--muted); margin-top: 3px; margin-bottom: 12px; }
+  #progress-bar-bg, #progress-bar-bg-f { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; margin-bottom: 4px; }
+  #progress-bar-fill, #progress-bar-fill-f { height: 100%; background: var(--accent); border-radius: 2px; width: 0%; transition: width .5s linear; }
+  #time-row, #time-row-f { display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--muted); margin-bottom: 12px; }
+  #music-controls, #music-controls-f { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 12px; }
   .mctrl { width: 42px; height: 42px; border-radius: 50%; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 1rem; cursor: pointer; display: flex; align-items: center; justify-content: center; }
   .mctrl.big { width: 50px; height: 50px; font-size: 1.3rem; background: var(--accent); color: #0f0f0f; border-color: var(--accent); }
+  .mctrl.local-pause { background: var(--surface); border-color: var(--border); }
+  .mctrl.local-pause.paused { background: rgba(255,107,107,0.15); border-color: #FF6B6B; }
   .mctrl:active { opacity: 0.7; }
-  #follower-music { color: var(--muted); font-size: 0.85rem; text-align: center; padding: 6px 0 2px; }
+  /* Local volume row */
+  .vol-row { display: flex; align-items: center; gap: 8px; padding: 0 2px; }
+  .vol-icon { font-size: 0.9rem; color: var(--muted); flex-shrink: 0; cursor: pointer; }
+  .vol-slider { flex: 1; accent-color: var(--accent); height: 4px; cursor: pointer; }
+  .vol-label { font-size: 0.72rem; color: var(--muted); min-width: 28px; text-align: right; }
+  .local-label { font-size: 0.7rem; color: var(--muted); text-align: center; margin-top: 6px; letter-spacing: .03em; }
+  #follower-music { padding: 6px 0 2px; }
 
   /* RECENTLY PLAYED */
   #recent-section { margin-bottom: 10px; }
@@ -391,29 +401,49 @@
             <div id="track-sub">YouTube playlist · audio only</div>
             <div id="progress-bar-bg"><div id="progress-bar-fill"></div></div>
             <div id="time-row"><span id="time-cur">0:00</span><span id="time-tot">0:00</span></div>
+            <!-- Broadcast controls — affects everyone -->
             <div id="music-controls">
-              <button class="mctrl" id="prev-btn" title="Previous">⏮</button>
-              <button class="mctrl big" id="play-pause-btn" title="Play/Pause">▶</button>
-              <button class="mctrl" id="next-btn" title="Next">⏭</button>
+              <button class="mctrl" id="prev-btn" title="Previous track for all">⏮</button>
+              <button class="mctrl big" id="play-pause-btn" title="Play/Pause for all">▶</button>
+              <button class="mctrl" id="next-btn" title="Next track for all">⏭</button>
             </div>
+            <!-- Local controls — only affects your own volume/playback -->
+            <div class="vol-row">
+              <span class="vol-icon" id="leader-vol-icon">🔊</span>
+              <input type="range" class="vol-slider" id="leader-vol" min="0" max="100" value="100"/>
+              <span class="vol-label" id="leader-vol-label">100</span>
+              <button class="mctrl local-pause" id="leader-local-pause" title="Pause just for you" style="width:34px;height:34px;font-size:0.85rem;margin-left:4px">🔇</button>
+            </div>
+            <div class="local-label">Volume &amp; mute — only affects your device</div>
           </div>
         </div>
         <!-- Follower UI -->
         <div id="follower-music" style="display:none">
           <!-- Tap-to-unlock button shown before first user gesture -->
           <div id="sync-music-btn-wrap" style="display:none; margin-bottom:12px">
-            <button id="sync-music-btn" style="width:100%;padding:14px;border-radius:var(--radius);background:var(--accent);border:none;color:#0f0f0f;font-size:1rem;font-weight:700;cursor:pointer;letter-spacing:0.01em">
+            <button id="sync-music-btn" style="width:100%;padding:14px;border-radius:var(--radius);background:var(--accent);border:none;color:#0f0f0f;font-size:1rem;font-weight:700;cursor:pointer">
               🎵 Tap to hear the music
             </button>
             <p style="font-size:0.75rem;color:var(--muted);text-align:center;margin-top:6px">Browser requires a tap before playing audio</p>
           </div>
-          <div id="audio-player-card-follower" style="display:none">
-            <div id="track-title-f">—</div>
-            <div id="track-sub-f" style="font-size:0.75rem;color:var(--muted);margin-top:3px;margin-bottom:12px">Synced from leader · audio only</div>
-            <div style="height:4px;background:var(--border);border-radius:2px;overflow:hidden;margin-bottom:4px"><div id="progress-bar-fill-f" style="height:100%;background:var(--accent);border-radius:2px;width:0%;transition:width .5s linear"></div></div>
-            <div style="display:flex;justify-content:space-between;font-size:0.72rem;color:var(--muted);margin-bottom:4px"><span id="time-cur-f">0:00</span><span id="time-tot-f">0:00</span></div>
+          <!-- Follower player card — shown once music is loaded -->
+          <div id="audio-player-card-follower">
+            <div id="track-title-f">Waiting for leader…</div>
+            <div id="track-sub-f">Synced from leader · your local controls below</div>
+            <div id="progress-bar-bg-f"><div id="progress-bar-fill-f"></div></div>
+            <div id="time-row-f"><span id="time-cur-f">0:00</span><span id="time-tot-f">0:00</span></div>
+            <!-- Local pause — only pauses your own audio -->
+            <div id="music-controls-f">
+              <button class="mctrl local-pause" id="follower-local-pause" title="Pause just on your device" style="width:50px;height:50px;font-size:1.3rem">⏸</button>
+            </div>
+            <!-- Local volume slider -->
+            <div class="vol-row">
+              <span class="vol-icon" id="follower-vol-icon">🔊</span>
+              <input type="range" class="vol-slider" id="follower-vol" min="0" max="100" value="100"/>
+              <span class="vol-label" id="follower-vol-label">100</span>
+            </div>
+            <div class="local-label">Your local volume &amp; pause — doesn't affect others</div>
           </div>
-          <p style="font-size:0.8rem;color:var(--muted);text-align:center;padding:4px 0">🎵 Music synced from leader</p>
         </div>
       </div>
 
@@ -825,11 +855,14 @@ function updateTrackInfo(who){
   if(!player||!player.getVideoData)return;
   const data=player.getVideoData();
   const title=data?.title||'Playing…';
-  const titleEl=document.getElementById(who==='leader'?'track-title':'track-title-f');
-  if(titleEl) titleEl.textContent=title;
-  if(who==='follower'){
-    const fc=document.getElementById('audio-player-card-follower');
-    if(fc) fc.style.display='block';
+  if(who==='leader'){
+    document.getElementById('track-title').textContent=title;
+    document.getElementById('track-sub').textContent='Playing · your controls below affect all riders';
+  } else {
+    document.getElementById('track-title-f').textContent=title;
+    document.getElementById('track-sub-f').textContent='Synced from leader · your local controls below';
+    document.getElementById('audio-player-card-follower').classList.add('on');
+    hideSyncButton();
   }
 }
 
@@ -935,7 +968,8 @@ function applyMusic(state){
   }
   // Immediately pause — we need a user tap before audio can start
   ytFollower.pauseVideo();
-  pendingMusic = state; // keep so unlock button can seek+play
+  pendingMusic = state;
+  document.getElementById('audio-player-card-follower').classList.add('on');
   showSyncButton();
 }
 
@@ -989,6 +1023,80 @@ document.getElementById('next-btn').addEventListener('click',()=>{
   if(!ytReady||!isLeader)return;
   ytPlayer.nextVideo();
   socket.emit('music_next',{});
+});
+
+// ─── Leader LOCAL controls (volume + mute — only affects leader's own device) ─
+let leaderLocalPaused = false;
+
+document.getElementById('leader-vol').addEventListener('input', e => {
+  const val = parseInt(e.target.value);
+  document.getElementById('leader-vol-label').textContent = val;
+  document.getElementById('leader-vol-icon').textContent = val === 0 ? '🔇' : val < 50 ? '🔉' : '🔊';
+  if(ytPlayer?.setVolume) ytPlayer.setVolume(val);
+  // If they drag volume up from 0, un-mute state
+  if(val > 0 && leaderLocalPaused){
+    leaderLocalPaused = false;
+    document.getElementById('leader-local-pause').classList.remove('paused');
+    document.getElementById('leader-local-pause').textContent = '🔇';
+  }
+});
+
+document.getElementById('leader-local-pause').addEventListener('click', () => {
+  leaderLocalPaused = !leaderLocalPaused;
+  const btn = document.getElementById('leader-local-pause');
+  const slider = document.getElementById('leader-vol');
+  if(leaderLocalPaused){
+    btn.classList.add('paused');
+    btn.textContent = '🔊';
+    btn.title = 'Unmute your device';
+    if(ytPlayer?.setVolume) ytPlayer.setVolume(0);
+    slider.value = 0;
+    document.getElementById('leader-vol-label').textContent = '0';
+    document.getElementById('leader-vol-icon').textContent = '🔇';
+  } else {
+    btn.classList.remove('paused');
+    btn.textContent = '🔇';
+    btn.title = 'Mute your device';
+    const restore = 80;
+    if(ytPlayer?.setVolume) ytPlayer.setVolume(restore);
+    slider.value = restore;
+    document.getElementById('leader-vol-label').textContent = restore;
+    document.getElementById('leader-vol-icon').textContent = '🔊';
+  }
+});
+
+// ─── Follower LOCAL controls (volume + pause — only affects their own device) ─
+let followerLocalPaused = false;
+
+document.getElementById('follower-vol').addEventListener('input', e => {
+  const val = parseInt(e.target.value);
+  document.getElementById('follower-vol-label').textContent = val;
+  document.getElementById('follower-vol-icon').textContent = val === 0 ? '🔇' : val < 50 ? '🔉' : '🔊';
+  if(ytFollower?.setVolume) ytFollower.setVolume(val);
+});
+
+document.getElementById('follower-local-pause').addEventListener('click', () => {
+  if(!ytFollower) return;
+  followerLocalPaused = !followerLocalPaused;
+  const btn = document.getElementById('follower-local-pause');
+  if(followerLocalPaused){
+    btn.classList.add('paused');
+    btn.textContent = '▶';
+    btn.title = 'Resume on your device';
+    ytFollower.setVolume(0); // mute instead of pause so sync is maintained
+    document.getElementById('follower-vol').value = 0;
+    document.getElementById('follower-vol-label').textContent = '0';
+    document.getElementById('follower-vol-icon').textContent = '🔇';
+  } else {
+    btn.classList.remove('paused');
+    btn.textContent = '⏸';
+    btn.title = 'Pause on your device';
+    const restore = 100;
+    ytFollower.setVolume(restore);
+    document.getElementById('follower-vol').value = restore;
+    document.getElementById('follower-vol-label').textContent = restore;
+    document.getElementById('follower-vol-icon').textContent = '🔊';
+  }
 });
 
 // Open YouTube Music in browser — user picks a playlist there, comes back and pastes URL
@@ -1072,12 +1180,13 @@ socket.on('music_next',()=>{ if(!isLeader&&ytFollowerReady) ytFollower.nextVideo
 socket.on('music_prev',()=>{ if(!isLeader&&ytFollowerReady) ytFollower.previousVideo(); });
 
 // ─── Push-to-Talk ─────────────────────────────────────────────────────────────
-let pttStream = null, pttRecorder = null;
+// Approach: record entire hold into chunks array, send ONE complete blob on release.
+// This is the only reliable cross-browser approach — individual MediaRecorder chunks
+// can't be decoded standalone because the WebM header is only in the first chunk.
+
+let pttStream = null, pttRecorder = null, pttChunks = [];
 let pttMuted = false, isTalking = false;
-let audioCtx = null;
-let musicDucked = false;
-// Queue so chunks play in order without overlap
-let audioQueue = Promise.resolve();
+let audioCtx = null, musicDucked = false;
 
 function getAudioCtx(){
   if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1092,61 +1201,62 @@ function duckMusic(on){
   try { if(ytFollower?.setVolume) ytFollower.setVolume(vol); } catch(e){}
 }
 
-// Choose best supported mimeType
-function getBestMimeType(){
-  const types = ['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus','audio/ogg'];
-  return types.find(t => MediaRecorder.isTypeSupported(t)) || '';
-}
-
 async function startPTT(){
   if(isTalking) return;
   try {
     pttStream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
   } catch(err){
-    alert('Microphone access denied. Please allow mic in your browser/phone settings.');
+    alert('Microphone access denied — allow mic in your phone settings then try again.');
     return;
   }
   isTalking = true;
-  const btn = document.getElementById('ptt-btn');
-  btn.classList.add('talking');
-  btn.innerHTML = '🔴 Talking…';
-  socket.emit('ptt_start');
+  pttChunks = [];
+  document.getElementById('ptt-btn').classList.add('talking');
+  document.getElementById('ptt-btn').innerHTML = '🔴 Talking…';
   duckMusic(true);
 
-  const mime = getBestMimeType();
+  // Broadcast to others that we started talking
+  socket.emit('ptt_start');
+
+  const mime = ['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus','audio/mp4','']
+    .find(t => t === '' || MediaRecorder.isTypeSupported(t));
+
   pttRecorder = new MediaRecorder(pttStream, mime ? { mimeType: mime } : {});
-  pttRecorder.ondataavailable = e => {
-    if(e.data && e.data.size > 0){
-      // Convert blob to base64 so it survives the socket trip
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        // reader.result is "data:audio/webm;base64,AAAA..."
-        socket.emit('ptt_chunk', reader.result);
-      };
-      reader.readAsDataURL(e.data);
-    }
+  pttRecorder.ondataavailable = e => { if(e.data && e.data.size > 0) pttChunks.push(e.data); };
+
+  pttRecorder.onstop = () => {
+    // All chunks collected — combine into one complete blob and send
+    if(pttChunks.length === 0) return;
+    const blob = new Blob(pttChunks, { type: pttRecorder.mimeType || 'audio/webm' });
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      // Send as base64 data URL — reliable over Socket.io
+      socket.emit('ptt_audio', { dataUrl: reader.result });
+    };
+    reader.readAsDataURL(blob);
+    pttChunks = [];
   };
-  pttRecorder.start(150); // 150ms chunks — low latency
+
+  pttRecorder.start(); // no timeslice — collect everything until stop()
 }
 
 function stopPTT(){
   if(!isTalking) return;
   isTalking = false;
-  const btn = document.getElementById('ptt-btn');
-  btn.classList.remove('talking');
-  btn.innerHTML = '🎙 Hold to Talk';
-  socket.emit('ptt_stop');
+  document.getElementById('ptt-btn').classList.remove('talking');
+  document.getElementById('ptt-btn').innerHTML = '🎙 Hold to Talk';
   duckMusic(false);
-  if(pttRecorder && pttRecorder.state !== 'inactive') pttRecorder.stop();
+  socket.emit('ptt_stop');
+  if(pttRecorder && pttRecorder.state !== 'inactive') pttRecorder.stop(); // triggers onstop → sends audio
   if(pttStream){ pttStream.getTracks().forEach(t => t.stop()); pttStream = null; }
 }
 
 const pttBtn = document.getElementById('ptt-btn');
-pttBtn.addEventListener('mousedown', startPTT);
+pttBtn.addEventListener('mousedown',  startPTT);
 pttBtn.addEventListener('touchstart', e => { e.preventDefault(); startPTT(); }, { passive:false });
-pttBtn.addEventListener('mouseup', stopPTT);
+pttBtn.addEventListener('mouseup',    stopPTT);
 pttBtn.addEventListener('mouseleave', stopPTT);
-pttBtn.addEventListener('touchend', e => { e.preventDefault(); stopPTT(); }, { passive:false });
+pttBtn.addEventListener('touchend',   e => { e.preventDefault(); stopPTT(); }, { passive:false });
 pttBtn.addEventListener('touchcancel', stopPTT);
 
 document.getElementById('ptt-mute-btn').addEventListener('click', () => {
@@ -1156,39 +1266,34 @@ document.getElementById('ptt-mute-btn').addEventListener('click', () => {
   btn.classList.toggle('muted', pttMuted);
 });
 
-// ── Incoming voice ────────────────────────────────────────────────────────────
-socket.on('ptt_start', ({ id, name, color }) => {
-  if(pttMuted) return;
-  duckMusic(true);
+// ── Incoming voice ─────────────────────────────────────────────────────────
+socket.on('ptt_start', ({ name, color }) => {
   document.getElementById('voice-toast-name').textContent = name + ' is talking…';
   document.getElementById('voice-toast').style.borderLeft = `3px solid ${color}`;
   document.getElementById('voice-toast').classList.add('visible');
+  if(!pttMuted) duckMusic(true);
 });
 
-socket.on('ptt_chunk', ({ id, chunk }) => {
+socket.on('ptt_audio', async ({ dataUrl }) => {
   if(pttMuted) return;
-  // chunk is a base64 data URL — decode and play via Web Audio
-  audioQueue = audioQueue.then(() => new Promise(resolve => {
-    try {
-      const ctx = getAudioCtx();
-      // Resume AudioContext if suspended (browser autoplay policy)
-      const play = () => {
-        // Strip data URL prefix to get raw base64
-        const base64 = chunk.split(',')[1];
-        const binary = atob(base64);
-        const bytes = new Uint8Array(binary.length);
-        for(let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        ctx.decodeAudioData(bytes.buffer.slice(0)).then(buf => {
-          const src = ctx.createBufferSource();
-          src.buffer = buf;
-          src.connect(ctx.destination);
-          src.onended = resolve;
-          src.start();
-        }).catch(() => resolve()); // bad chunk — skip and continue
-      };
-      if(ctx.state === 'suspended'){ ctx.resume().then(play); } else { play(); }
-    } catch(e){ resolve(); }
-  }));
+  try {
+    const ctx = getAudioCtx();
+    if(ctx.state === 'suspended') await ctx.resume();
+
+    // Convert base64 data URL → ArrayBuffer
+    const base64 = dataUrl.split(',')[1];
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for(let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+    const audioBuf = await ctx.decodeAudioData(bytes.buffer);
+    const src = ctx.createBufferSource();
+    src.buffer = audioBuf;
+    src.connect(ctx.destination);
+    src.start(0);
+  } catch(e){
+    console.warn('PTT audio decode failed:', e);
+  }
 });
 
 socket.on('ptt_stop', () => {
