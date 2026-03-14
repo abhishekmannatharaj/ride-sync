@@ -65,17 +65,25 @@
 
   /* NAV BANNER */
   #nav-banner {
-    display: none; background: rgba(78,205,196,0.1);
-    border-bottom: 1px solid rgba(78,205,196,0.2);
-    padding: 7px 14px; font-size: 0.82rem; color: var(--accent);
+    display: none; background: #1a2f2e;
+    border-bottom: 2px solid rgba(78,205,196,0.4);
+    padding: 0; font-size: 0.82rem; color: #fff;
     flex-shrink: 0;
   }
-  #nav-banner.visible { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  #nav-instruction { flex: 1; font-weight: 500; }
+  #nav-banner.visible { display: flex; align-items: stretch; }
+  #nav-arrow-box {
+    background: var(--accent); min-width: 56px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.6rem; flex-shrink: 0; padding: 0 4px;
+  }
+  #nav-main { flex: 1; padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  #nav-instruction { font-weight: 600; font-size: 0.88rem; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #nav-sub { font-size: 0.75rem; color: rgba(255,255,255,0.65); }
   #open-gmaps-btn {
-    padding: 5px 11px; border-radius: 8px; border: 1px solid var(--accent);
+    padding: 0 12px; border-left: 1px solid rgba(255,255,255,0.15);
     background: transparent; color: var(--accent); font-size: 0.75rem;
-    cursor: pointer; font-weight: 600; white-space: nowrap;
+    cursor: pointer; font-weight: 600; white-space: nowrap; border-top: none; border-right: none; border-bottom: none;
+    flex-shrink: 0;
   }
 
   /* MAP — takes all remaining vertical space */
@@ -321,8 +329,12 @@
 <div id="app">
 
   <div id="nav-banner">
-    <span id="nav-instruction">Set a destination to start navigating</span>
-    <button id="open-gmaps-btn" style="display:none" onclick="openGoogleMaps()">Open in Maps 🧭</button>
+    <div id="nav-arrow-box" id="nav-arrow-box">⬆️</div>
+    <div id="nav-main">
+      <div id="nav-instruction">Set a destination to start navigating</div>
+      <div id="nav-sub" id="nav-sub"></div>
+    </div>
+    <button id="open-gmaps-btn" style="display:none" onclick="openGoogleMaps()">Maps 🧭</button>
   </div>
 
   <div id="map">
@@ -627,6 +639,8 @@ function applyDestination(d){
 
 function applyDestClear(){
   destination=null;
+  routeSteps=[]; routeCoords=[]; currentStepIndex=0;
+  lastRouteFetchPos=null; arrivedAtDest=false;
   if(destMarker){destMarker.remove();destMarker=null;}
   if(routePolyline){routePolyline.remove();routePolyline=null;}
   document.getElementById('dest-name-el').textContent='No destination set';
@@ -636,38 +650,197 @@ function applyDestClear(){
   document.getElementById('dest-actions').style.display='none';
   document.getElementById('follower-nav-btn-wrap').style.display='none';
   document.getElementById('nav-banner').classList.remove('visible');
+  document.getElementById('nav-arrow-box').textContent='⬆️';
+  document.getElementById('nav-instruction').textContent='Set a destination to start navigating';
+  document.getElementById('nav-sub').textContent='';
   document.getElementById('dist-text').textContent='';
 }
 
-async function fetchRoute(){
-  if(!destination||myLat===null) return;
-  try{
-    const url=`https://router.project-osrm.org/route/v1/driving/${myLng},${myLat};${destination.lng},${destination.lat}?overview=full&geometries=geojson&steps=true`;
-    const res=await fetch(url);
-    const data=await res.json();
-    if(data.code!=='Ok'||!data.routes?.length) return;
-    const route=data.routes[0];
-    const coords=route.geometry.coordinates.map(([lo,la])=>[la,lo]);
-    if(routePolyline){routePolyline.remove();}
-    routePolyline=L.polyline(coords,{color:'#4ECDC4',weight:4,opacity:0.8}).addTo(map);
+// ─── Navigation Engine ────────────────────────────────────────────────────────
+let routeSteps = [];        // full OSRM steps array
+let routeCoords = [];       // full route [[lat,lng],...]
+let currentStepIndex = 0;
+let lastRouteFetchPos = null;
+let routeFetchInProgress = false;
+let arrivedAtDest = false;
 
-    const steps=route.legs[0]?.steps||[];
-    const dist=fmtDist(route.distance/1000);
-    const mins=Math.round(route.duration/60);
-    const inst=steps[0]?.name?`Head toward ${steps[0].name}`:'Head toward destination';
-    document.getElementById('nav-instruction').textContent=`🗺 ${inst} · ${dist} · ${mins} min`;
-    document.getElementById('dist-text').textContent=`${dist} to dest`;
-    document.getElementById('nav-banner').classList.add('visible');
-  }catch(e){ updateNavBanner(); }
+// Maneuver type → arrow emoji
+const MANEUVER_ICONS = {
+  'turn-left':         '⬅️',  'turn-sharp-left':  '↙️',  'turn-slight-left': '↖️',
+  'turn-right':        '➡️',  'turn-sharp-right': '↘️',  'turn-slight-right':'↗️',
+  'uturn':             '↩️',  'merge':            '🔀',  'fork':             '🍴',
+  'roundabout':        '🔄',  'rotary':           '🔄',  'roundabout-turn':  '🔄',
+  'continue':          '⬆️',  'straight':         '⬆️',  'depart':           '🚦',
+  'arrive':            '🏁',  'end of road':      '⬆️',  'new name':         '⬆️',
+  'notification':      '⬆️',  'off ramp':         '↘️',  'on ramp':          '↗️',
+};
+
+function getManeuverIcon(step) {
+  if (!step?.maneuver) return '⬆️';
+  const type = step.maneuver.type || '';
+  const mod  = step.maneuver.modifier || '';
+  const key  = mod ? `${type}-${mod}` : type;
+  return MANEUVER_ICONS[key] || MANEUVER_ICONS[type] || '⬆️';
 }
 
-function updateNavBanner(){
-  if(!destination) return;
-  const d=myLat!==null?haversine(myLat,myLng,destination.lat,destination.lng):null;
-  document.getElementById('nav-instruction').textContent=d!==null
-    ?`🏁 ${destination.name||'Destination'} — ${fmtDist(d)} away`
-    :`🏁 ${destination.name||'Destination'}`;
-  if(d!==null) document.getElementById('dist-text').textContent=fmtDist(d)+' to dest';
+function bearingDeg(lat1, lng1, lat2, lng2) {
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const la1 = lat1 * Math.PI / 180, la2 = lat2 * Math.PI / 180;
+  const y = Math.sin(dLng) * Math.cos(la2);
+  const x = Math.cos(la1) * Math.sin(la2) - Math.sin(la1) * Math.cos(la2) * Math.cos(dLng);
+  return ((Math.atan2(y, x) * 180 / Math.PI) + 360) % 360;
+}
+
+// Snap a lat/lng to the closest point index on the route coords array
+function closestPointIndex(lat, lng, coords) {
+  let best = 0, bestDist = Infinity;
+  for (let i = 0; i < coords.length; i++) {
+    const d = haversine(lat, lng, coords[i][0], coords[i][1]);
+    if (d < bestDist) { bestDist = d; best = i; }
+  }
+  return best;
+}
+
+// Find which step index the user is currently on
+function currentStep(lat, lng) {
+  if (!routeSteps.length) return 0;
+  let best = currentStepIndex;
+  // Only look forward from last known step (+ 2 buffer)
+  for (let i = Math.max(0, currentStepIndex - 1); i < Math.min(routeSteps.length, currentStepIndex + 5); i++) {
+    const s = routeSteps[i];
+    if (!s.geometry?.coordinates?.length) continue;
+    const [sLng, sLat] = s.geometry.coordinates[0];
+    const dist = haversine(lat, lng, sLat, sLng);
+    const nextIdx = i + 1;
+    if (nextIdx < routeSteps.length) {
+      const ns = routeSteps[nextIdx];
+      if (ns.geometry?.coordinates?.length) {
+        const [nLng, nLat] = ns.geometry.coordinates[0];
+        const distToNext = haversine(lat, lng, nLat, nLng);
+        if (distToNext < 0.04) { best = nextIdx; break; } // within 40m of next step
+      }
+    }
+  }
+  return best;
+}
+
+async function fetchRoute() {
+  if (!destination || myLat === null || routeFetchInProgress) return;
+  routeFetchInProgress = true;
+  try {
+    const url = `https://router.project-osrm.org/route/v1/bicycle/${myLng},${myLat};${destination.lng},${destination.lat}?overview=full&geometries=geojson&steps=true&annotations=false`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data.code !== 'Ok' || !data.routes?.length) return;
+
+    const route = data.routes[0];
+    routeCoords = route.geometry.coordinates.map(([lo, la]) => [la, lo]);
+    routeSteps  = route.legs[0]?.steps || [];
+    currentStepIndex = 0;
+    arrivedAtDest = false;
+    lastRouteFetchPos = { lat: myLat, lng: myLng };
+
+    drawRemainingRoute(0);
+    updateTurnInstruction(myLat, myLng, route.distance, route.duration);
+  } catch(e) {
+    updateNavBanner();
+  } finally {
+    routeFetchInProgress = false;
+  }
+}
+
+function drawRemainingRoute(fromCoordIndex) {
+  const remaining = routeCoords.slice(fromCoordIndex);
+  if (remaining.length < 2) return;
+  if (routePolyline) { routePolyline.remove(); routePolyline = null; }
+  routePolyline = L.polyline(remaining, {
+    color: '#4ECDC4', weight: 6, opacity: 0.9,
+    lineJoin: 'round', lineCap: 'round'
+  }).addTo(map);
+}
+
+function updateTurnInstruction(lat, lng, totalDist, totalDur) {
+  const distToGoKm = totalDist / 1000;
+  const mins = Math.round(totalDur / 60);
+
+  // Find current step
+  currentStepIndex = currentStep(lat, lng);
+  const step = routeSteps[currentStepIndex];
+  if (!step) { updateNavBanner(); return; }
+
+  const icon = getManeuverIcon(step);
+  const streetName = step.name || (routeSteps[currentStepIndex + 1]?.name) || '';
+
+  // Distance to next maneuver
+  let distToTurn = 0;
+  if (step.geometry?.coordinates?.length) {
+    const [tLng, tLat] = step.geometry.coordinates[step.geometry.coordinates.length - 1];
+    distToTurn = haversine(lat, lng, tLat, tLng);
+  }
+
+  // Check arrival
+  const distToDest = haversine(lat, lng, destination.lat, destination.lng);
+  if (distToDest < 0.03 && !arrivedAtDest) {  // within 30m
+    arrivedAtDest = true;
+    document.getElementById('nav-arrow-box').textContent = '🏁';
+    document.getElementById('nav-instruction').textContent = 'You have arrived!';
+    document.getElementById('nav-sub').textContent = destination.name || 'Destination reached';
+    document.getElementById('dist-text').textContent = '';
+    return;
+  }
+
+  // Build instruction text
+  const turnDist = distToTurn < 1 ? `${Math.round(distToTurn * 1000)}m` : `${distToTurn.toFixed(1)}km`;
+  let instruction, arrowIcon;
+
+  if (step.maneuver?.type === 'depart') {
+    arrowIcon = '⬆️';
+    instruction = streetName ? `Head on ${streetName}` : 'Start route';
+  } else if (step.maneuver?.type === 'arrive') {
+    arrowIcon = '🏁';
+    instruction = 'Destination ahead';
+  } else {
+    arrowIcon = getManeuverIcon(step);
+    const mod = step.maneuver?.modifier ? step.maneuver.modifier.replace('-', ' ') : '';
+    const action = mod ? `Turn ${mod}` : 'Continue';
+    instruction = `${action}${streetName ? ' onto ' + streetName : ''} in ${turnDist}`;
+  }
+
+  document.getElementById('nav-arrow-box').textContent = arrowIcon;
+  document.getElementById('nav-instruction').textContent = instruction;
+  document.getElementById('nav-sub').textContent = `${fmtDist(distToDest)} away · ${mins} min`;
+  document.getElementById('dist-text').textContent = fmtDist(distToDest);
+  document.getElementById('nav-banner').classList.add('visible');
+  document.getElementById('open-gmaps-btn').style.display = 'block';
+}
+
+function updateNavBanner() {
+  if (!destination || myLat === null) return;
+  const d = haversine(myLat, myLng, destination.lat, destination.lng);
+  document.getElementById('nav-arrow-box').textContent = '⬆️';
+  document.getElementById('nav-instruction').textContent = destination.name || 'Destination';
+  document.getElementById('nav-sub').textContent = fmtDist(d) + ' away — calculating route…';
+  document.getElementById('dist-text').textContent = fmtDist(d);
+}
+
+// Called every GPS tick — updates route trimming and turn instruction live
+function onPositionForNav(lat, lng) {
+  if (!destination || !routeCoords.length) return;
+
+  // Trim already-passed route coords from the polyline
+  const closest = closestPointIndex(lat, lng, routeCoords);
+  drawRemainingRoute(closest);
+
+  // Update turn instruction using remaining distance/time estimate
+  const distToDest = haversine(lat, lng, destination.lat, destination.lng);
+  const approxDur = distToDest / 0.004; // ~14km/h cycling pace in seconds
+  updateTurnInstruction(lat, lng, distToDest * 1000, approxDur);
+
+  // Re-fetch full route if we've moved 80m+ from last fetch point (rerouting)
+  if (lastRouteFetchPos) {
+    const moved = haversine(lat, lng, lastRouteFetchPos.lat, lastRouteFetchPos.lng);
+    if (moved > 0.08) fetchRoute(); // 80m threshold
+  }
 }
 
 function openGoogleMaps(){
@@ -744,7 +917,11 @@ function startGPS(){
     if(!inited){initMap(lat,lng);inited=true;}
     socket.emit('location',{lat,lng});
     if(ridersData[myId]) putMarker(ridersData[myId],lat,lng);
-    if(destination) updateNavBanner();
+    // Live navigation update on every GPS tick
+    if(destination){
+      if(routeCoords.length) onPositionForNav(lat, lng);
+      else updateNavBanner();
+    }
   },err=>{
     document.getElementById('gps-text').textContent='GPS error: '+err.message;
   },{enableHighAccuracy:true,maximumAge:2000,timeout:10000});
