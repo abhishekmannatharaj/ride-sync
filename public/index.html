@@ -294,6 +294,13 @@
         </div>
         <!-- Follower UI -->
         <div id="follower-music" style="display:none">
+          <!-- Tap-to-unlock button shown before first user gesture -->
+          <div id="sync-music-btn-wrap" style="display:none; margin-bottom:12px">
+            <button id="sync-music-btn" style="width:100%;padding:14px;border-radius:var(--radius);background:var(--accent);border:none;color:#0f0f0f;font-size:1rem;font-weight:700;cursor:pointer;letter-spacing:0.01em">
+              🎵 Tap to hear the music
+            </button>
+            <p style="font-size:0.75rem;color:var(--muted);text-align:center;margin-top:6px">Browser requires a tap before playing audio</p>
+          </div>
           <div id="audio-player-card-follower" style="display:none">
             <div id="track-title-f">—</div>
             <div id="track-sub-f" style="font-size:0.75rem;color:var(--muted);margin-top:3px;margin-bottom:12px">Synced from leader · audio only</div>
@@ -707,20 +714,50 @@ function loadMusic(url){
 
 function applyMusic(state){
   if(!state.listId&&!state.videoId) return;
-  if(!isLeader){
-    if(!ytFollowerReady){pendingMusic=state;return;}
-    if(state.listId){
-      ytFollower.loadPlaylist({list:state.listId,listType:'playlist',index:state.index||0});
-      ytFollower.seekTo(state.timestamp||0,true);
-    } else {
-      ytFollower.loadVideoById(state.videoId,state.timestamp||0);
-    }
-    if(state.playing){ytFollower.seekTo(state.timestamp||0,true);ytFollower.playVideo();}
-    else ytFollower.pauseVideo();
+  if(isLeader) return;
+  if(!ytFollowerReady){ pendingMusic=state; return; }
+  // Load the track/playlist into the player but don't play yet —
+  // playVideo() will be called once the user taps the unlock button.
+  if(state.listId){
+    ytFollower.loadPlaylist({list:state.listId,listType:'playlist',index:state.index||0});
+  } else {
+    ytFollower.loadVideoById(state.videoId, state.timestamp||0);
   }
+  // Immediately pause — we need a user tap before audio can start
+  ytFollower.pauseVideo();
+  pendingMusic = state; // keep so unlock button can seek+play
+  showSyncButton();
 }
 
-// Leader controls
+// ─── Autoplay unlock ─────────────────────────────────────────────────────────
+let audioUnlocked = false;
+let pendingPlay = null; // {timestamp} waiting for unlock
+
+function showSyncButton(){
+  if(audioUnlocked) return; // already unlocked, no need
+  const wrap = document.getElementById('sync-music-btn-wrap');
+  if(wrap) wrap.style.display='block';
+  // Open the panel so user sees the button
+  document.getElementById('bottom-panel').classList.remove('collapsed');
+}
+
+function hideSyncButton(){
+  const wrap = document.getElementById('sync-music-btn-wrap');
+  if(wrap) wrap.style.display='none';
+}
+
+document.getElementById('sync-music-btn').addEventListener('click', ()=>{
+  audioUnlocked = true;
+  hideSyncButton();
+  if(!ytFollowerReady) return;
+  // Seek to current leader position and play
+  const ts = pendingPlay?.timestamp ?? pendingMusic?.timestamp ?? 0;
+  ytFollower.seekTo(ts, true);
+  ytFollower.playVideo();
+  pendingPlay = null;
+});
+
+// ─── Leader controls ──────────────────────────────────────────────────────────
 document.getElementById('yt-load-btn').addEventListener('click',()=>{
   if(!isLeader)return;
   loadMusic(document.getElementById('yt-url-input').value.trim());
@@ -750,9 +787,8 @@ socket.on('init',({you,riders,musicState,destinationState})=>{
   riders.forEach(r=>{ridersData[r.id]=r;});
   isLeader=ridersData[myId]?.isLeader||false;
   renderRiders(); updateLeaderUI();
-  if(musicState?.videoId) applyMusic(musicState);
+  if(musicState?.listId||musicState?.videoId) applyMusic({...musicState,playing:false});
   if(destinationState?.lat) setTimeout(()=>applyDestination(destinationState),600);
-  // Draw markers for riders who already have a location (putMarker queues if map not ready yet)
   riders.forEach(r=>{ if(r.lat!==null&&r.id!==myId) putMarker(r,r.lat,r.lng); });
 });
 
@@ -772,7 +808,6 @@ socket.on('rider_left',id=>{
 socket.on('location_update',({id,lat,lng})=>{
   if(!ridersData[id]) return;
   ridersData[id].lat=lat; ridersData[id].lng=lng;
-  // Skip drawing own marker via socket — GPS handler does it directly
   if(id===myId) return;
   if(map) putMarker(ridersData[id],lat,lng);
 });
@@ -782,17 +817,44 @@ socket.on('leader_changed',id=>{
 });
 socket.on('destination_set',d=>applyDestination(d));
 socket.on('destination_cleared',()=>applyDestClear());
-socket.on('music_load',s=>{if(!isLeader)applyMusic(s);});
-socket.on('music_play',({timestamp,videoId})=>{
-  if(!isLeader&&ytFollowerReady){
-    if(videoId&&ytFollower.getVideoData()?.video_id!==videoId) ytFollower.loadVideoById(videoId,timestamp);
-    else ytFollower.seekTo(timestamp,true);
-    ytFollower.playVideo();
-  }
+
+socket.on('music_load', s=>{
+  if(isLeader) return;
+  pendingMusic = s;
+  applyMusic(s);
 });
-socket.on('music_pause',({timestamp})=>{if(!isLeader&&ytFollowerReady){ytFollower.seekTo(timestamp,true);ytFollower.pauseVideo();}});
-socket.on('music_next',()=>{if(!isLeader&&ytFollowerReady)ytFollower.nextVideo();});
-socket.on('music_prev',()=>{if(!isLeader&&ytFollowerReady)ytFollower.previousVideo();});
+
+socket.on('music_play',({timestamp,videoId})=>{
+  if(isLeader) return;
+  if(!audioUnlocked){
+    // Queue the play — show button if not already shown
+    pendingPlay = {timestamp};
+    if(ytFollowerReady){
+      // Pre-load so it's ready when they tap
+      if(videoId && ytFollower.getVideoData()?.video_id!==videoId)
+        ytFollower.loadVideoById(videoId, timestamp);
+      else
+        ytFollower.seekTo(timestamp, true);
+      ytFollower.pauseVideo();
+    }
+    showSyncButton();
+    return;
+  }
+  if(!ytFollowerReady) return;
+  if(videoId && ytFollower.getVideoData()?.video_id!==videoId)
+    ytFollower.loadVideoById(videoId, timestamp);
+  else
+    ytFollower.seekTo(timestamp, true);
+  ytFollower.playVideo();
+});
+
+socket.on('music_pause',({timestamp})=>{
+  if(isLeader||!ytFollowerReady) return;
+  ytFollower.seekTo(timestamp,true);
+  ytFollower.pauseVideo();
+});
+socket.on('music_next',()=>{ if(!isLeader&&ytFollowerReady) ytFollower.nextVideo(); });
+socket.on('music_prev',()=>{ if(!isLeader&&ytFollowerReady) ytFollower.previousVideo(); });
 
 // ─── Panel ────────────────────────────────────────────────────────────────────
 document.getElementById('panel-handle').addEventListener('click',()=>{

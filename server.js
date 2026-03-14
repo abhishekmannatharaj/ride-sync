@@ -90,16 +90,16 @@ io.on('connection', (socket) => {
   });
 
   // Music control (leader only)
-  socket.on('music_load', ({ videoId }) => {
+  socket.on('music_load', ({ videoId, listId, timestamp }) => {
     if (!riders[socket.id]?.isLeader) return;
-    musicState = { videoId, playing: false, timestamp: 0, syncedAt: Date.now() };
-    io.emit('music_load', { videoId });
+    musicState = { videoId: videoId||null, listId: listId||null, playing: false, timestamp: timestamp||0, syncedAt: Date.now() };
+    io.emit('music_load', musicState);
   });
 
-  socket.on('music_play', ({ timestamp }) => {
+  socket.on('music_play', ({ timestamp, videoId }) => {
     if (!riders[socket.id]?.isLeader) return;
     musicState = { ...musicState, playing: true, timestamp, syncedAt: Date.now() };
-    io.emit('music_play', { timestamp });
+    io.emit('music_play', { timestamp, videoId });
   });
 
   socket.on('music_pause', ({ timestamp }) => {
