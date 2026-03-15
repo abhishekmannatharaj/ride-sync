@@ -887,9 +887,6 @@ function onPositionForNav(lat, lng) {
 
 // ─── Riding Mode ──────────────────────────────────────────────────────────────
 let rideActive = false;
-let lastHeading = null;      // degrees, 0 = north
-let lastLat = null, lastLng = null; // for heading calculation between ticks
-let headingMarkerEl = null;  // the heading arrow DOM element inside myMarker
 
 function leaderStartRide() {
   socket.emit('ride_start');
@@ -904,195 +901,75 @@ function stopRide() {
 function activateRideMode() {
   if (rideActive) return;
   rideActive = true;
+  lastCenteredLat = null; lastCenteredLng = null; // force immediate center on first tick
 
-  // Collapse bottom panel to give max map space
+  // Collapse bottom panel — max map space
   document.getElementById('bottom-panel').classList.add('collapsed');
-
-  // Show stop button and ride banner
   document.getElementById('stop-ride-btn').classList.add('visible');
   document.getElementById('ride-active-banner').classList.add('visible');
-
-  // Hide search bar (distracting during ride)
   document.getElementById('search-wrap').classList.remove('visible');
 
-  // Switch to tight navigation zoom
+  // Zoom in tight and center on rider
   if (map && myLat !== null) {
-    map.setView([myLat, myLng], 18, { animate: true });
+    map.setView([myLat, myLng], 17, { animate: true });
   }
 
-  // Disable free pan/zoom during ride so map stays locked to rider
+  // Allow user to still zoom with pinch but disable drag — map follows rider
   if (map) {
     map.dragging.disable();
     map.scrollWheelZoom.disable();
-    map.touchZoom.disable();
+    map.touchZoom.enable();        // pinch zoom still works
     map.doubleClickZoom.disable();
   }
-
-  // Add heading arrow to my marker
-  addHeadingArrow();
 }
 
 function deactivateRideMode() {
   if (!rideActive) return;
   rideActive = false;
+  lastCenteredLat = null; lastCenteredLng = null;
 
   document.getElementById('stop-ride-btn').classList.remove('visible');
   document.getElementById('ride-active-banner').classList.remove('visible');
 
-  // Restore map interaction
   if (map) {
     map.dragging.enable();
     map.scrollWheelZoom.enable();
     map.touchZoom.enable();
     map.doubleClickZoom.enable();
-    // Reset map rotation to north-up
-    setMapBearing(0);
   }
-
-  // Restore search for leader
   if (isLeader && map) {
     document.getElementById('search-wrap').classList.add('visible');
   }
-
-  removeHeadingArrow();
-  lastHeading = null;
 }
 
-// ── Map rotation (CSS transform on the tile pane) ─────────────────────────
-function setMapBearing(deg) {
-  if (!map) return;
-  const panes = ['tilePane','overlayPane','shadowPane','markerPane','tooltipPane','popupPane'];
-  panes.forEach(p => {
-    const el = map.getPane(p);
-    if (el) {
-      el.style.transformOrigin = '50% 50%';
-      el.style.transform = `rotate(${-deg}deg)`;
-    }
-  });
-  // Counter-rotate markers so they stay upright
-  document.querySelectorAll('.rider-marker').forEach(el => {
-    el.style.transform = `rotate(${deg}deg)`;
-  });
-}
+// ── Called every GPS tick during riding mode — smooth center on rider ────────
+let lastCenteredLat = null, lastCenteredLng = null;
 
-// ── Heading arrow on my marker ────────────────────────────────────────────
-function addHeadingArrow() {
-  if (!myMarker) return;
-  const el = myMarker.getElement();
-  if (!el || headingMarkerEl) return;
-  headingMarkerEl = document.createElement('div');
-  headingMarkerEl.style.cssText = `
-    position:absolute; top:-16px; left:50%;
-    transform:translateX(-50%) rotate(0deg);
-    font-size:16px; line-height:1; pointer-events:none;
-    filter:drop-shadow(0 1px 2px rgba(0,0,0,.7));
-    transition:transform 0.4s ease;
-  `;
-  headingMarkerEl.textContent = '▲';
-  el.style.overflow = 'visible';
-  el.appendChild(headingMarkerEl);
-}
-
-function removeHeadingArrow() {
-  if (headingMarkerEl) {
-    headingMarkerEl.remove();
-    headingMarkerEl = null;
-  }
-}
-
-function updateHeadingArrow(deg) {
-  if (!headingMarkerEl) {
-    addHeadingArrow();
-  }
-  if (headingMarkerEl) {
-    headingMarkerEl.style.transform = `translateX(-50%) rotate(${deg}deg)`;
-  }
-}
-
-// ── Called every GPS tick during riding mode ──────────────────────────────
 function updateRidingMode(lat, lng) {
   if (!rideActive || !map) return;
 
-  // Calculate heading from movement direction
-  let heading = lastHeading || 0;
-  if (lastLat !== null && lastLng !== null) {
-    const moved = haversine(lastLat, lastLng, lat, lng);
-    if (moved > 0.003) { // only update heading if moved >3m to avoid noise
-      heading = bearingDeg(lastLat, lastLng, lat, lng);
-      lastHeading = heading;
-    }
+  // Only re-center if rider has moved more than ~15m from last center
+  // This prevents micro-jitter from GPS noise causing constant map movement
+  if (lastCenteredLat !== null) {
+    const moved = haversine(lastCenteredLat, lastCenteredLng, lat, lng);
+    if (moved < 0.015) return; // less than 15m — skip
   }
-  lastLat = lat; lastLng = lng;
 
-  // Try to use device compass if available (more accurate than GPS heading)
-  // — handled separately via DeviceOrientationEvent below
+  lastCenteredLat = lat;
+  lastCenteredLng = lng;
 
-  // Rotate map to face direction of travel (heading = top of screen)
-  setMapBearing(heading);
-
-  // Keep my position at bottom-third of screen (like Google Maps navigation)
-  const mapH = map.getSize().y;
-  const mapW = map.getSize().x;
-  const offsetPx = mapH * 0.25; // offset 25% toward bottom
-
-  // Convert pixel offset to latlng offset
-  const center = map.containerPointToLatLng([mapW / 2, mapH / 2 + offsetPx]);
-  const myPt = map.latLngToContainerPoint([lat, lng]);
-  const targetCenter = map.containerPointToLatLng([
-    myPt.x - (mapW / 2 - myPt.x) * 0,
-    myPt.y + offsetPx
-  ]);
-
-  map.setView([lat, lng], map.getZoom(), { animate: true, duration: 0.5, noMoveStart: true });
-
-  // Update heading arrow on marker
-  updateHeadingArrow(0); // arrow always points up since map rotates with us
+  // Smooth pan — no animation if moving fast, animation if slow
+  map.setView([lat, lng], map.getZoom(), {
+    animate: true,
+    duration: 0.8,
+    easeLinearity: 0.5,
+    noMoveStart: true
+  });
 }
 
-// ── Device compass (more accurate heading on phones) ──────────────────────
-let compassHeading = null;
-let compassGranted = false;
-
-function requestCompass() {
-  // iOS 13+ requires permission
-  if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-    DeviceOrientationEvent.requestPermission().then(state => {
-      if (state === 'granted') compassGranted = true;
-    }).catch(() => {});
-  } else {
-    compassGranted = true; // Android grants automatically
-  }
-}
-
-window.addEventListener('deviceorientationabsolute', handleOrientation, true);
-window.addEventListener('deviceorientation', handleOrientation, true);
-
-function handleOrientation(e) {
-  if (!rideActive) return;
-  let heading = null;
-  if (e.absolute && e.alpha !== null) {
-    // Android absolute: alpha is clockwise from north
-    heading = 360 - e.alpha;
-  } else if (e.webkitCompassHeading !== undefined) {
-    // iOS: webkitCompassHeading is directly degrees from north
-    heading = e.webkitCompassHeading;
-  }
-  if (heading !== null) {
-    compassHeading = heading;
-    lastHeading = heading;
-    setMapBearing(heading);
-    updateHeadingArrow(0);
-  }
-}
-
-// Socket events for ride start/stop from leader
-socket.on('ride_start', () => {
-  activateRideMode();
-  requestCompass();
-});
-socket.on('ride_stop', () => {
-  deactivateRideMode();
-});
+// Socket events
+socket.on('ride_start', () => activateRideMode());
+socket.on('ride_stop',  () => deactivateRideMode());
 
 function openGoogleMaps(){
   if(!destination) return;
