@@ -140,6 +140,16 @@ io.on('connection', (socket) => {
     io.emit('destination_cleared');
   });
 
+  // Ride control (leader only)
+  socket.on('ride_start', () => {
+    if (!riders[socket.id]?.isLeader) return;
+    io.emit('ride_start', {});
+  });
+  socket.on('ride_stop', () => {
+    if (!riders[socket.id]?.isLeader) return;
+    io.emit('ride_stop', {});
+  });
+
   socket.on('disconnect', () => {
     const wasLeader = riders[socket.id]?.isLeader;
     socket.broadcast.emit('ptt_stop', { id: socket.id }); // clean up if was talking

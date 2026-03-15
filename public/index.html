@@ -202,6 +202,36 @@
   .dest-btn { flex: 1; padding: 9px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface2); color: var(--text); font-size: 0.82rem; cursor: pointer; font-weight: 500; }
   .dest-btn.primary { background: var(--accent); color: #0f0f0f; border-color: var(--accent); }
 
+  /* START RIDE BUTTON */
+  #start-ride-wrap { display: none; padding: 10px 0 4px; }
+  #start-ride-btn {
+    width: 100%; padding: 15px; border-radius: var(--radius);
+    background: #22c55e; border: none; color: #fff;
+    font-size: 1rem; font-weight: 700; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  #start-ride-btn:active { opacity: 0.85; }
+
+  /* STOP RIDE BUTTON — floats on map during ride */
+  #stop-ride-btn {
+    display: none; position: absolute;
+    bottom: 72px; left: 50%; transform: translateX(-50%);
+    z-index: 501; padding: 12px 28px; border-radius: 24px;
+    background: #FF6B6B; border: none; color: #fff;
+    font-size: 0.9rem; font-weight: 700; cursor: pointer;
+    box-shadow: 0 3px 16px rgba(255,107,107,0.5); white-space: nowrap;
+  }
+  #stop-ride-btn.visible { display: block; }
+
+  /* RIDE ACTIVE INDICATOR in leader banner */
+  #ride-active-banner {
+    display: none; background: rgba(34,197,94,0.12);
+    border-bottom: 1px solid rgba(34,197,94,0.25);
+    padding: 5px 14px; font-size: 0.78rem; color: #22c55e;
+    text-align: center; font-weight: 600; flex-shrink: 0;
+  }
+  #ride-active-banner.visible { display: block; }
+
   /* MUSIC - audio only player */
   #music-section { border-top: 1px solid var(--border); padding-top: 14px; }
   #yt-input-row { display: flex; gap: 8px; margin-bottom: 12px; }
@@ -328,6 +358,8 @@
 <!-- MAIN APP -->
 <div id="app">
 
+  <div id="ride-active-banner">🚴 Ride in progress — map follows your heading</div>
+
   <div id="nav-banner">
     <div id="nav-arrow-box" id="nav-arrow-box">⬆️</div>
     <div id="nav-main">
@@ -352,6 +384,7 @@
     <button id="dest-mode-btn" title="Tap map to pin destination">🏁</button>
     <button id="center-btn" title="Center on me">📍</button>
     <button id="map-theme-btn" title="Toggle map theme">🌙</button>
+    <button id="stop-ride-btn" onclick="stopRide()">⏹ Stop Ride</button>
   </div>
 
   <div id="leader-banner">⭐ You are the leader — search or tap 🏁 to set destination</div>
@@ -384,6 +417,10 @@
         <div id="dest-actions" style="display:none">
           <button class="dest-btn" onclick="toggleTapMode()">📍 Tap map</button>
           <button class="dest-btn primary" onclick="openGoogleMaps()">🧭 Navigate</button>
+        </div>
+        <!-- Start Ride — leader only, shown when destination is set -->
+        <div id="start-ride-wrap">
+          <button id="start-ride-btn" onclick="leaderStartRide()">🚴 Start Ride for Everyone</button>
         </div>
         <div id="follower-nav-btn-wrap" style="display:none; margin-top:10px">
           <button class="dest-btn primary" style="width:100%" onclick="openGoogleMaps()">🧭 Open Navigation in Google Maps</button>
@@ -630,8 +667,12 @@ function applyDestination(d){
   document.getElementById('open-gmaps-btn').style.display='block';
   document.getElementById('nav-banner').classList.add('visible');
 
-  if(isLeader) document.getElementById('dest-actions').style.display='flex';
-  else document.getElementById('follower-nav-btn-wrap').style.display='block';
+  if(isLeader){
+    document.getElementById('dest-actions').style.display='flex';
+    document.getElementById('start-ride-wrap').style.display='block';
+  } else {
+    document.getElementById('follower-nav-btn-wrap').style.display='block';
+  }
 
   if(myLat!==null) fetchRoute();
   updateNavBanner();
@@ -648,6 +689,7 @@ function applyDestClear(){
   document.getElementById('clear-dest-btn').classList.remove('visible');
   document.getElementById('open-gmaps-btn').style.display='none';
   document.getElementById('dest-actions').style.display='none';
+  document.getElementById('start-ride-wrap').style.display='none';
   document.getElementById('follower-nav-btn-wrap').style.display='none';
   document.getElementById('nav-banner').classList.remove('visible');
   document.getElementById('nav-arrow-box').textContent='⬆️';
@@ -843,6 +885,215 @@ function onPositionForNav(lat, lng) {
   }
 }
 
+// ─── Riding Mode ──────────────────────────────────────────────────────────────
+let rideActive = false;
+let lastHeading = null;      // degrees, 0 = north
+let lastLat = null, lastLng = null; // for heading calculation between ticks
+let headingMarkerEl = null;  // the heading arrow DOM element inside myMarker
+
+function leaderStartRide() {
+  socket.emit('ride_start');
+  activateRideMode();
+}
+
+function stopRide() {
+  if (isLeader) socket.emit('ride_stop');
+  deactivateRideMode();
+}
+
+function activateRideMode() {
+  if (rideActive) return;
+  rideActive = true;
+
+  // Collapse bottom panel to give max map space
+  document.getElementById('bottom-panel').classList.add('collapsed');
+
+  // Show stop button and ride banner
+  document.getElementById('stop-ride-btn').classList.add('visible');
+  document.getElementById('ride-active-banner').classList.add('visible');
+
+  // Hide search bar (distracting during ride)
+  document.getElementById('search-wrap').classList.remove('visible');
+
+  // Switch to tight navigation zoom
+  if (map && myLat !== null) {
+    map.setView([myLat, myLng], 18, { animate: true });
+  }
+
+  // Disable free pan/zoom during ride so map stays locked to rider
+  if (map) {
+    map.dragging.disable();
+    map.scrollWheelZoom.disable();
+    map.touchZoom.disable();
+    map.doubleClickZoom.disable();
+  }
+
+  // Add heading arrow to my marker
+  addHeadingArrow();
+}
+
+function deactivateRideMode() {
+  if (!rideActive) return;
+  rideActive = false;
+
+  document.getElementById('stop-ride-btn').classList.remove('visible');
+  document.getElementById('ride-active-banner').classList.remove('visible');
+
+  // Restore map interaction
+  if (map) {
+    map.dragging.enable();
+    map.scrollWheelZoom.enable();
+    map.touchZoom.enable();
+    map.doubleClickZoom.enable();
+    // Reset map rotation to north-up
+    setMapBearing(0);
+  }
+
+  // Restore search for leader
+  if (isLeader && map) {
+    document.getElementById('search-wrap').classList.add('visible');
+  }
+
+  removeHeadingArrow();
+  lastHeading = null;
+}
+
+// ── Map rotation (CSS transform on the tile pane) ─────────────────────────
+function setMapBearing(deg) {
+  if (!map) return;
+  const panes = ['tilePane','overlayPane','shadowPane','markerPane','tooltipPane','popupPane'];
+  panes.forEach(p => {
+    const el = map.getPane(p);
+    if (el) {
+      el.style.transformOrigin = '50% 50%';
+      el.style.transform = `rotate(${-deg}deg)`;
+    }
+  });
+  // Counter-rotate markers so they stay upright
+  document.querySelectorAll('.rider-marker').forEach(el => {
+    el.style.transform = `rotate(${deg}deg)`;
+  });
+}
+
+// ── Heading arrow on my marker ────────────────────────────────────────────
+function addHeadingArrow() {
+  if (!myMarker) return;
+  const el = myMarker.getElement();
+  if (!el || headingMarkerEl) return;
+  headingMarkerEl = document.createElement('div');
+  headingMarkerEl.style.cssText = `
+    position:absolute; top:-16px; left:50%;
+    transform:translateX(-50%) rotate(0deg);
+    font-size:16px; line-height:1; pointer-events:none;
+    filter:drop-shadow(0 1px 2px rgba(0,0,0,.7));
+    transition:transform 0.4s ease;
+  `;
+  headingMarkerEl.textContent = '▲';
+  el.style.overflow = 'visible';
+  el.appendChild(headingMarkerEl);
+}
+
+function removeHeadingArrow() {
+  if (headingMarkerEl) {
+    headingMarkerEl.remove();
+    headingMarkerEl = null;
+  }
+}
+
+function updateHeadingArrow(deg) {
+  if (!headingMarkerEl) {
+    addHeadingArrow();
+  }
+  if (headingMarkerEl) {
+    headingMarkerEl.style.transform = `translateX(-50%) rotate(${deg}deg)`;
+  }
+}
+
+// ── Called every GPS tick during riding mode ──────────────────────────────
+function updateRidingMode(lat, lng) {
+  if (!rideActive || !map) return;
+
+  // Calculate heading from movement direction
+  let heading = lastHeading || 0;
+  if (lastLat !== null && lastLng !== null) {
+    const moved = haversine(lastLat, lastLng, lat, lng);
+    if (moved > 0.003) { // only update heading if moved >3m to avoid noise
+      heading = bearingDeg(lastLat, lastLng, lat, lng);
+      lastHeading = heading;
+    }
+  }
+  lastLat = lat; lastLng = lng;
+
+  // Try to use device compass if available (more accurate than GPS heading)
+  // — handled separately via DeviceOrientationEvent below
+
+  // Rotate map to face direction of travel (heading = top of screen)
+  setMapBearing(heading);
+
+  // Keep my position at bottom-third of screen (like Google Maps navigation)
+  const mapH = map.getSize().y;
+  const mapW = map.getSize().x;
+  const offsetPx = mapH * 0.25; // offset 25% toward bottom
+
+  // Convert pixel offset to latlng offset
+  const center = map.containerPointToLatLng([mapW / 2, mapH / 2 + offsetPx]);
+  const myPt = map.latLngToContainerPoint([lat, lng]);
+  const targetCenter = map.containerPointToLatLng([
+    myPt.x - (mapW / 2 - myPt.x) * 0,
+    myPt.y + offsetPx
+  ]);
+
+  map.setView([lat, lng], map.getZoom(), { animate: true, duration: 0.5, noMoveStart: true });
+
+  // Update heading arrow on marker
+  updateHeadingArrow(0); // arrow always points up since map rotates with us
+}
+
+// ── Device compass (more accurate heading on phones) ──────────────────────
+let compassHeading = null;
+let compassGranted = false;
+
+function requestCompass() {
+  // iOS 13+ requires permission
+  if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+    DeviceOrientationEvent.requestPermission().then(state => {
+      if (state === 'granted') compassGranted = true;
+    }).catch(() => {});
+  } else {
+    compassGranted = true; // Android grants automatically
+  }
+}
+
+window.addEventListener('deviceorientationabsolute', handleOrientation, true);
+window.addEventListener('deviceorientation', handleOrientation, true);
+
+function handleOrientation(e) {
+  if (!rideActive) return;
+  let heading = null;
+  if (e.absolute && e.alpha !== null) {
+    // Android absolute: alpha is clockwise from north
+    heading = 360 - e.alpha;
+  } else if (e.webkitCompassHeading !== undefined) {
+    // iOS: webkitCompassHeading is directly degrees from north
+    heading = e.webkitCompassHeading;
+  }
+  if (heading !== null) {
+    compassHeading = heading;
+    lastHeading = heading;
+    setMapBearing(heading);
+    updateHeadingArrow(0);
+  }
+}
+
+// Socket events for ride start/stop from leader
+socket.on('ride_start', () => {
+  activateRideMode();
+  requestCompass();
+});
+socket.on('ride_stop', () => {
+  deactivateRideMode();
+});
+
 function openGoogleMaps(){
   if(!destination) return;
   window.open(`https://www.google.com/maps/dir/?api=1&destination=${destination.lat},${destination.lng}&travelmode=bicycling`,'_blank');
@@ -917,11 +1168,13 @@ function startGPS(){
     if(!inited){initMap(lat,lng);inited=true;}
     socket.emit('location',{lat,lng});
     if(ridersData[myId]) putMarker(ridersData[myId],lat,lng);
-    // Live navigation update on every GPS tick
+    // Live navigation update
     if(destination){
       if(routeCoords.length) onPositionForNav(lat, lng);
       else updateNavBanner();
     }
+    // Riding mode — map follows + rotates
+    if(rideActive) updateRidingMode(lat, lng);
   },err=>{
     document.getElementById('gps-text').textContent='GPS error: '+err.message;
   },{enableHighAccuracy:true,maximumAge:2000,timeout:10000});
